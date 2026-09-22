@@ -1,0 +1,58 @@
+[project]
+name = "rca-agent"
+version = "0.1.0"
+description = "多 Agent 根因定位与不可逆操作边界"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+
+# 依赖原则：
+#   1. 全部选「纯 Python」或「有 cp314 win_amd64 wheel」的包 —— 保证零本地编译
+#   2. 不用 extras（如 uvicorn[standard]），它会拉入需要编译的原生依赖
+#   3. 版本用下界约束，精确锁定交给 uv.lock
+dependencies = [
+    # --- Agent 编排 ---
+    "langgraph>=1.2.12",
+    "langchain-core>=1.6.4",
+    "langchain-openai>=1.6.3",
+
+    # --- 协议与模型 ---
+    "mcp>=2.2.0",
+    "openai>=3.17.0",
+
+    # --- 数据与校验 ---
+    "pydantic>=2.13.5",
+
+    # --- 被诊断系统 ---
+    "fastapi>=0.141.1",
+    "uvicorn>=0.53.0",
+
+    # --- 工程基础 ---
+    "httpx>=0.28.1",
+    "tiktoken>=0.14.0",
+    "structlog>=26.1.0",
+    "python-dotenv>=1.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.0",
+    "ruff>=0.14",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "eval"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.uv]
+# 依赖解析失败时给出完整原因，便于排查
+link-mode = "copy"
