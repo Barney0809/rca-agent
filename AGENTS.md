@@ -247,6 +247,7 @@ extra_body={"thinking": {"type": "disabled"}}
 | `scripts/reduce_run.py` | 遥测降维验证（产出压缩率证据） |
 | `scripts/mutate_check.py` | **变异检查**：证明回归用例真的能变红（`--list` 看所有变异组） |
 | `eval/runner.py` | 评测运行器（`--agent baseline|multi`） |
+| `eval/rescore.py` | 用新评分规则**离线重算**历史结果（不花钱；同时用于检查"有没有误伤"） |
 
 所有 Python 脚本**必须**用 `.\.venv\Scripts\python.exe` 或 `uv run python` 执行。
 
