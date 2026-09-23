@@ -75,6 +75,25 @@ python scripts\reduce_run.py
 
 `scripts/dev.ps1` 会交叉检查裸 `python` 指向哪里，不一致就提醒。
 
+### 提交信息用 `-F <文件>`，不用 `-m <字符串>`
+
+```powershell
+# 对 —— 先把信息写进文件，再整体传入
+git commit -q -F runs\_commitmsg.txt
+
+# 错 —— 信息里若有 " 或换行，PowerShell 会把它截断成多个参数
+git commit -m $longMessage
+```
+
+**为什么**（见 `docs/harness-log.md` P3）：PowerShell 5.1 把含双引号的字符串
+传给**原生命令**时会重新拼命令行，内嵌的 `"` 会截断字符串，
+后半段变成独立参数传给 git。
+
+⚠️ 这个失败**容易被漏掉**：`git add` 是成功的，只有 `commit` 失败，
+而错误信息埋在输出里。所以**提交后要核对 `git log`**。
+
+同一原则适用于任何传给原生命令的**长文本** —— 有引号、换行或非 ASCII 时一律走文件。
+
 ---
 
 ## 📖 第 2 条：用户背景与沟通要求
