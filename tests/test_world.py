@@ -17,7 +17,31 @@ import httpx
 import pytest
 
 ORDER_URL = os.environ.get("WORLD_ORDER_URL", "http://127.0.0.1:8080")
+INVENTORY_URL = os.environ.get("WORLD_INVENTORY_URL", "http://127.0.0.1:8081")
 PAYMENT_URL = os.environ.get("WORLD_PAYMENT_URL", "http://127.0.0.1:8082")
+
+SERVICE_URLS = {"order": ORDER_URL, "inventory": INVENTORY_URL, "payment": PAYMENT_URL}
+
+
+def _metric(service: str, series_prefix: str) -> float:
+    """读某个服务上、名字以 series_prefix 开头的指标之和。
+
+    ⚠️ 指标是**累计值**（自容器启动以来），所以要比较时必须在前后各读一次取差值。
+    忘了这一点会得到"每次都比上次大"的假结论。
+    """
+    resp = httpx.get(f"{SERVICE_URLS[service]}/metrics", timeout=10.0)
+    total = 0.0
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, _, value = line.rpartition(" ")
+        if name.startswith(series_prefix):
+            try:
+                total += float(value)
+            except ValueError:
+                continue
+    return total
 
 
 async def _orders(n: int, concurrency: int = 20) -> list[int]:
@@ -181,4 +205,79 @@ async def test_f2_does_exhaust_pool_and_show_503(clean_world):
     assert failed / len(codes) > 0.3, (
         f"F2 的失败比例只有 {failed / len(codes):.0%}，低于预期的 30%；"
         f"状态码分布 {dict(dist)}"
+    )
+
+
+# ================================================================
+# 回归：loadgen 必须遵守请求数上限
+# ================================================================
+
+async def test_loadgen_respects_max_requests(clean_world):
+    """回归 —— loadgen 曾经**超发 53%**（目标 1200，实发 1841）。
+
+    历史：上限只在监控循环里检查，而那个循环每 5 秒才醒一次。
+    后果：数据量不可复现 —— 同样的参数两次跑出不同的日志量，
+    而"数据量"正是需求假设 A1 的验收依据。
+
+    修法：worker 自己检查上限（每次请求前看一眼），不等监控循环。
+
+    容差为什么是 +concurrency：停止信号发出时，所有 worker 可能已经
+    各自在处理一个请求，所以最多多出「并发数」个。这是理论上界。
+    """
+    from world.loadgen.main import run_load
+
+    concurrency = 8
+    target = 40
+
+    result = await run_load(
+        concurrency=concurrency,
+        duration_s=60.0,          # 给足时间，靠请求数而不是时间来停
+        max_requests=target,
+        verbose=False,
+        poll_s=30.0,              # 故意把监控循环调得很迟钝：证明 worker 自己会停
+    )
+
+    upper_bound = target + concurrency
+    assert result["total"] <= upper_bound, (
+        f"超发了：目标 {target}，上限 {upper_bound}，实际 {result['total']}。"
+        f"说明 worker 没有自己检查上限（只靠监控循环会严重超发）。"
+    )
+    assert result["total"] >= target * 0.8, (
+        f"发得太少：目标 {target}，实际 {result['total']} —— 停止条件可能过于激进"
+    )
+
+
+# ================================================================
+# 回归：F4 必须真的把流量放大到下游
+# ================================================================
+
+async def test_f4_retry_storm_multiplies_downstream_traffic(clean_world):
+    """回归 —— F4 第一版**完全没效果**（5xx=0，与基线一模一样）。
+
+    历史：F4 只改了 inventory 的重试次数（1 → 5）。
+    但**重试只在调用失败时才发生** —— payment 好好的，
+    所以重试 5 次和 1 次毫无区别。
+
+    修法：F4 必须同时让 payment 失败（`risk_error_rate`），
+    这样每次失败都会被放大成 5 次调用。
+
+    这条用例盯住的是"重试风暴"的**定义**：下游收到的调用数必须显著多于请求数。
+    """
+    n = 120
+    clean_world.inject("payment", {"risk_error_rate": 0.6})
+    clean_world.inject("inventory", {"downstream_retries": 5})
+    try:
+        before = _metric("inventory", "downstream_calls_total")
+        codes = await _orders(n, concurrency=20)
+        after = _metric("inventory", "downstream_calls_total")
+    finally:
+        clean_world.reset()
+
+    calls = after - before
+    per_order = calls / max(len(codes), 1)
+
+    assert per_order > 1.3, (
+        f"F4 没有把流量放大：{len(codes)} 个请求只引发 {calls:.0f} 次下游调用"
+        f"（{per_order:.2f} 次/请求）。\n"
+        f"若接近 1.0，说明重试根本没被触发 —— 检查 F4 是否同时让 payment 报错。"
     )
