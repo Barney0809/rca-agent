@@ -350,6 +350,91 @@ def test_regression_p4_the_scan_actually_found_printing_scripts():
 
 
 # ================================================================
+# 故障目录自检：变更记录必须能对上真实的参数改动
+# ================================================================
+#
+# 真实缺陷（新增 F7 时踩到）：
+#
+#   故障定义里的 `changes`（写进变更日志的条目）和 `patches`（真正改哪些参数）
+#   是**两份手写的清单**，它们之间唯一的联系就是那个环境变量名。写错了不会有
+#   任何报错 —— 只会安静地写出 `"from": null, "to": null`。
+#
+#   后果不是"场景变难了"，而是**数据坏了**：Agent 看到的是一条没有数值的变更，
+#   而它本该看到 `2000 → 1200`。而且**场景照样跑完、数据照样落盘**，
+#   只有人去逐行读 changes.ndjson 才会发现。
+#
+#   原来的 `_knob_of` 是一张手维护的映射表（只有两条），新增故障时必须记得来加。
+#   **"必须记得"就是这类缺陷的定义。** 现在改成按命名规则推导，
+#   并且加了这道硬校验：推不出来就拒绝执行。
+
+
+def test_every_fault_change_entry_resolves_to_a_real_patch():
+    """故障目录自检：每条变更记录都要能对应上一次真实的参数改动。"""
+    from scripts.inject_fault import FAULTS, _check_changes_are_resolvable
+
+    problems = []
+    for fid, fault in FAULTS.items():
+        reason = _check_changes_are_resolvable(fault)
+        if reason:
+            problems.append(f"{fid}: {reason}")
+
+    assert not problems, (
+        "以下故障的变更记录取不到值 —— 会让变更日志写出 from/to = null"
+        "（数据坏了，不是'难'）：\n  " + "\n  ".join(problems)
+    )
+
+
+def test_fault_catalog_selfcheck_actually_covers_something():
+    """元测试：确认上面那条不是"目录是空的"造成的假绿。"""
+    from scripts.inject_fault import FAULTS
+
+    assert len(FAULTS) >= 7, f"故障目录只有 {len(FAULTS)} 条：{sorted(FAULTS)}"
+
+    with_changes = [fid for fid, f in FAULTS.items() if f.changes]
+    assert len(with_changes) >= 3, (
+        f"只有 {len(with_changes)} 个故障带变更记录：{with_changes} —— "
+        "校验这些条目的用例才有意义"
+    )
+    # 至少一条的 key 需要走别名（否则"推导规则"没被测到）
+    assert "F2" in with_changes, "F2 的 W_ORDER_POOL_SIZE 需要走别名，必须被覆盖"
+
+
+def test_knob_name_derivation_handles_the_awkward_names():
+    """锁住推导规则本身：这几种写法都要能对上，否则变更日志会写出 null。"""
+    from scripts.inject_fault import _knob_of
+
+    assert _knob_of("W_ORDER_POOL_ACQUIRE_TIMEOUT_MS") == "pool_acquire_timeout_ms"
+    assert _knob_of("W_INVENTORY_DOWNSTREAM_RETRIES") == "downstream_retries"
+    assert _knob_of("W_ORDER_POOL_SIZE") == "pool_limit"          # 走别名
+    assert _knob_of("W_PAYMENT_RISK_LATENCY_MS") == "risk_latency_ms"
+
+
+def test_regression_20_f7_precondition_is_enforced_not_just_documented():
+    """F7 的前提必须被**强制**，不能只在文档里提醒。
+
+    F7 的全部价值在于"那条被记录的变更在因果上无关"，
+    而它之所以无关，是因为池从来不会满（并发 < 池容量 64）。
+    并发一旦 >= 池容量，池就会真的满、那条变更就真的生效 ——
+    场景立刻退化成"变更就是根因"，也就是 F2 犯过的那个错。
+
+    `harness-log #1` 的教训就是"靠人记得必然失效"，所以这里要求：
+    **不满足前提时拒绝执行，而不是打印警告然后照跑。**
+    """
+    from scripts.inject_fault import _check_f7_precondition
+
+    assert _check_f7_precondition(50) is None, "并发 50 < 64，应当通过"
+    assert _check_f7_precondition(63) is None, "并发 63 < 64，边界内应当通过"
+
+    reason = _check_f7_precondition(64)
+    assert reason is not None, (
+        "并发 64 = 池容量时池会被占满，那条变更就会真的生效 —— 必须拒绝执行"
+    )
+    assert "拒绝" in reason or "重跑" in reason or "并发" in reason, (
+        f"拒绝理由必须说清怎么办，实际：{reason}"
+    )
+
+
+# ================================================================
 # regression_#6：第三方库写的日志不能整类被漏掉
 # ================================================================
 

@@ -528,3 +528,75 @@ def test_regression_19_baseline_slice_stores_the_whole_verdict():
     )
     recomputed, _ = sc.judge(attempt.root_cause)
     assert recomputed == attempt.correct, "用存档文本重算必须得到存档里记录的判定"
+
+
+# ================================================================
+# #20 作废的场景不得参与聚合
+# ================================================================
+#
+# F2 的答案被对照实验证明是反的（harness-log #20）：
+# 它会把答对的扣分、把答错的加分。
+#
+# 但它**保留在目录里作为反例留档**（"我们出错过一道题"比正确答案更有教学价值）。
+# 于是产生一个新的风险：**坏题目继续参与准确率聚合，污染每一次比较**。
+#
+# 而且这种污染**看不出来** —— 你只会觉得"准确率怎么这么低"，
+# 不会想到是某道题的答案定错了。
+#
+# 所以：作废必须是一个**机制**（字段 + 聚合层过滤 + 报告显式说明），
+# 而不是"记得别把它算进去"。
+
+
+def test_regression_20_invalidated_scenario_is_excluded_from_aggregate():
+    """核心：作废场景的尝试必须被排除在所有数字之外。"""
+    from eval.runner import Report
+
+    # F1 全对、F2 全错。若 F2 参与聚合，准确率会被拉到 50%；排除后应为 100%。
+    attempts = [
+        _attempt(fault_id="F1", round_no=r, correct=True) for r in (1, 2, 3)
+    ] + [
+        _attempt(fault_id="F2", round_no=r, correct=False) for r in (1, 2, 3)
+    ]
+    agg = Report(
+        model="m", mode="live", rounds=3, started_at="t", attempts=attempts
+    ).agg()
+
+    assert agg["accuracy"] == 1.0, (
+        f"F2 已作废，不该影响准确率；实际 {agg['accuracy']:.0%}。"
+        "坏题目参与聚合会污染每一次比较，而且看不出来。"
+    )
+    assert "F2" not in agg["per_fault"], "作废场景不该出现在逐场景表里"
+    assert "F1" in agg["per_fault"], "有效场景必须还在"
+
+
+def test_regression_20_exclusion_is_disclosed_not_silent():
+    """排除必须**说出来**，不能悄悄不显示。
+
+    否则读报告的人会以为"所有场景都算进去了" —— 那又是一种
+    "数字看起来没问题，但它测的不是你以为的东西"。
+    """
+    from eval.runner import Report
+
+    attempts = [_attempt(fault_id="F1", round_no=r, correct=True) for r in (1, 2, 3)]
+    attempts += [_attempt(fault_id="F2", round_no=1, correct=False)]
+    agg = Report(
+        model="m", mode="live", rounds=3, started_at="t", attempts=attempts
+    ).agg()
+
+    assert "F2" in agg["invalidated"], "聚合结果里必须带上作废场景及理由"
+    assert agg["invalidated"]["F2"], "理由不能是空字符串"
+    assert agg["n_excluded_attempts"] == 1
+    assert agg["n_attempts_total"] == 4, "总数要保留，才能看出「排除了多少」"
+
+
+def test_regression_20_the_exclusion_check_is_not_vacuous():
+    """元测试：确认 F2 真的被标成作废了，否则上面两条测的是空气。"""
+    from eval.scenarios import SCENARIOS
+
+    assert SCENARIOS["F2"].invalidated_reason, (
+        "F2 必须带 invalidated_reason —— 它的答案已被对照实验证明是反的（#20）"
+    )
+    # 其他场景不该被误标（否则会把有效数据也排除掉）
+    live = [fid for fid, s in SCENARIOS.items() if not s.invalidated_reason]
+    assert "F7" in live, "F7 是合格的红鲱鱼场景，不能被标成作废"
+    assert len(live) >= 6, f"被标作废的场景太多了：{sorted(SCENARIOS)}"

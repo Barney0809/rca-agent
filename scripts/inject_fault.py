@@ -162,8 +162,93 @@ FAULTS: dict[str, Fault] = {
             ground_truth="order 自身的内存泄漏（症状与根因同源，单 Agent 也能定位）",
             expect=("下单成功",),
         ),
+        # ============================================================
+        # F7 —— **合格的红鲱鱼场景**（harness-log #20 的产物）
+        # ============================================================
+        #
+        # ## 为什么要有它
+        #
+        # F2 本来承担"红鲱鱼"这个职责，但对照实验证明**它出反了**：
+        # 那条被当作"红鲱鱼"的变更（池 64→2）**就是真根因**，
+        # 而声明的真根因（风控变慢）只是放大器。
+        # 结果是**答对的被扣分、答错的被加分**。
+        #
+        # F7 是重做的版本，判据是：
+        #     **那条被记录的变更，必须在因果上与事故无关。**
+        # 而且这一点不能靠声明，必须能被两件事验证：
+        #     ①  单独施加它 → 什么都不发生
+        #     ②  单独施加真根因 → 事故出现
+        #
+        # ## 本场景的设计
+        #
+        #   真根因（**不**写进变更日志）：`payment.risk_latency_ms: 30 → 800`
+        #   红鲱鱼（**写进**变更日志）：`order.pool_acquire_timeout_ms: 2000 → 1200`
+        #
+        # 那条红鲱鱼为什么在因果上无关？因为它**从来不会被触及**：
+        #     负载并发 50 ⇒ order 侧最多 50 个请求同时在途 ⇒ 最多占 50 个连接；
+        #     而池容量是 64 ⇒ **池永远不满 ⇒ 没有任何请求等待过连接
+        #     ⇒ 那个"获取连接的等待上限"根本没有被读过**。
+        #
+        # 它又为什么像一个根因？因为它长得太像了：
+        #     "有人在故障前一分钟把连接池的等待上限从 2000ms 砍到 1200ms"
+        #     —— 一个只看变更日志的人会立刻得出"超时被调小导致请求失败"。
+        #
+        # 而**数据能证伪它**（这正是本场景要考的能力）：
+        #     · 池从没满过（`pool_in_flight` 峰值 < 64）
+        #     · 池耗尽次数 = 0、连接池等待 WARNING = 0
+        #     · **HTTP 5xx = 0** —— 那条变更预言的是"请求失败"，而一个失败都没有
+        #
+        # ## 与 F1 构成一对严格对照 ★
+        #
+        # F7 的物理条件与 **F1 完全相同**（都只有风控变慢这一件事），
+        # 唯一差别是**变更日志里多了一条无关变更**。
+        # 所以 (F1, F7) 这一对能把"**是不是被无关变更带偏了**"单独隔离出来 ——
+        # 而"抗不抗得住无关变更"恰恰是多 Agent 交叉举证机制声称要解决的问题。
+        #
+        # ⚠️ 前提必须被强制，不能靠文档提醒（#20 的教训）：
+        #    **并发必须小于池容量（64）**，否则池会真的满、那条变更就会真的生效。
+        #    见 `_check_f7_precondition()`。
+        Fault(
+            id="F7",
+            name="无关变更干扰（红鲱鱼 / 真根因未记录）",
+            patches={
+                "order": {"pool_acquire_timeout_ms": 1200},
+                "payment": {"risk_latency_ms": 800},
+            },
+            changes=({"target": "order", "key": "W_ORDER_POOL_ACQUIRE_TIMEOUT_MS"},),
+            symptom_at="order", root_at="payment", cross_service=True,
+            ground_truth=(
+                "payment 的外部风控依赖延迟升高；"
+                "order 的池获取超时被调小是与故障无关的变更"
+                "（从未被触及：池从未满、零等待、零池耗尽、零 5xx）"
+            ),
+            expect=("外部风控响应缓慢",),
+        ),
     ]
 }
+
+
+def _check_f7_precondition(concurrency: int, pool_limit: int = 64) -> str | None:
+    """校验 F7 成立的前提。返回 None 表示通过，否则返回拒绝理由。
+
+    F7 的全部价值在于"那条被记录的变更在因果上无关"。
+    而它之所以无关，是因为**池从来不会满**：
+        并发 N < 池容量 64 ⇒ 最多 N 个连接被占 ⇒ 没有请求等过连接
+        ⇒ "池获取等待上限"这个参数根本没被读到。
+    一旦 N >= 64，池就会真的满，那条变更就会真的生效，
+    **场景立刻退化成"变更就是根因"——也就是 F2 犯过的那个错。**
+
+    ⚠️ 所以这是个**硬前提，必须被强制**，不能只在文档里提醒一句。
+       本仓库已经吃过一次"靠文档提醒"的亏（harness-log #1：靠人记得）。
+    """
+    if concurrency >= pool_limit:
+        return (
+            f"F7 要求并发 < order 池容量（{pool_limit}），当前并发 = {concurrency}。\n"
+            "  原因：并发 >= 池容量时池会真的被占满，那条'池获取超时被调小'的变更\n"
+            "        就会真的生效 —— 场景立刻退化成'变更就是根因'（F2 犯过的错）。\n"
+            "  请用更低的并发重跑，例如 --concurrency 50。"
+        )
+    return None
 
 
 # ================================================================
@@ -317,7 +402,7 @@ def revert_patches(client: httpx.Client, fault: Fault) -> dict[str, dict]:
 
 def cmd_list() -> int:
     print("=" * 96)
-    print("  六种故障")
+    print("  故障目录")
     print("=" * 96)
     print(f"  {'ID':<4} {'名称':<26} {'症状在':<10} {'根因在':<10} {'跨服务':<7} 记录变更")
     print("  " + "-" * 92)
@@ -329,7 +414,12 @@ def cmd_list() -> int:
         )
     print()
     print("  ⚠️ '记录变更'=是 的才会出现在 Agent 能看到的变更日志里。")
-    print("     F2 是红鲱鱼（看起来像根因，其实不是）；F4 是真根因。")
+    print("     它们的性质**各不相同**，不能一概而论：")
+    print("       F4 —— 那条变更是**真根因**（重试次数 1→5）")
+    print("       F7 —— 那条变更是**无关变更**（从未被触及），是合格的红鲱鱼")
+    print("       F2 —— ⚠️ 原本按'红鲱鱼'设计，但对照实验证明**它出反了**：")
+    print("              那条变更（池 64→2）**就是真根因**。见 harness-log #20。")
+    print("              本场景**保留原样作为反例留档**，红鲱鱼职责已由 F7 承担。")
     return 0
 
 
@@ -380,6 +470,28 @@ def cmd_revert_all() -> int:
 async def _run_scenario(
     fault: Fault | None, concurrency: int, duration_s: float, max_requests: int
 ) -> int:
+    # ⚠️ 前提校验放在**建目录之前** —— 不通过就一个字节都不写，
+    #    免得留下一个"看着像场景、其实前提不成立"的数据目录，
+    #    被后来的评测当成有效场景用了。
+    if fault is not None:
+        # 任何故障都要先过这一关：变更清单必须能对上补丁清单（纯静态，不需要服务）
+        reason = _check_changes_are_resolvable(fault)
+        if reason:
+            print("=" * 96)
+            print("  拒绝执行：故障定义的变更记录取不到值")
+            print("=" * 96)
+            print(f"  {reason}")
+            return 2
+
+        if fault.id == "F7":
+            reason = _check_f7_precondition(concurrency)
+            if reason:
+                print("=" * 96)
+                print("  拒绝执行：F7 的前提不成立")
+                print("=" * 96)
+                print(f"  {reason}")
+                return 2
+
     run_id = f"r-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -522,13 +634,78 @@ async def _run_scenario(
     return 0
 
 
+# 少数历史上名字不一致的字段走别名表。
+# 只有"环境变量名去掉前缀后 ≠ Knobs 字段名"的才需要列在这里。
+_KNOB_ALIASES = {
+    "pool_size": "pool_limit",          # W_ORDER_POOL_SIZE → pool_limit
+}
+
+_SERVICE_PREFIXES = ("ORDER", "INVENTORY", "PAYMENT")
+
+
 def _knob_of(env_key: str) -> str:
-    """把环境变量名映射成 Knobs 字段名。"""
-    mapping = {
-        "W_ORDER_POOL_SIZE": "pool_limit",
-        "W_INVENTORY_DOWNSTREAM_RETRIES": "downstream_retries",
-    }
-    return mapping.get(env_key, env_key.lower())
+    """把环境变量名映射成 Knobs 字段名。
+
+    规则：去掉 `W_` 和 `W_<SERVICE>_` 前缀后小写，就是 Knobs 的字段名。
+
+        W_ORDER_POOL_ACQUIRE_TIMEOUT_MS  →  pool_acquire_timeout_ms
+        W_INVENTORY_DOWNSTREAM_RETRIES   →  downstream_retries
+        W_ORDER_POOL_SIZE                →  pool_size → 别名 → pool_limit
+
+    ⚠️ 这里**刻意不写一张手维护的映射表**（原来只有两条，就是这么写的）。
+
+    真实缺陷：新增 F7 时用了 `W_ORDER_POOL_ACQUIRE_TIMEOUT_MS`，
+    它不在那张表里，于是回退成 `w_order_pool_acquire_timeout_ms` ——
+    查不到 → 变更日志写出 **`"from": null, "to": null`**。
+
+    后果不是"场景变难了"，而是**数据坏了**：
+    Agent 看到的是一条没有数值的变更，而它本该看到 `2000 → 1200`。
+    更糟的是**没有任何报错** —— 场景照样跑完、数据照样落盘，
+    只有人去逐行读 changes.ndjson 才会发现。
+
+    所以除了改推导规则，调用方还必须**硬校验**（见 `_check_changes_are_resolvable`）：
+    推导不出来就拒绝执行，而不是写个 null 下去。
+    """
+    name = env_key
+    if name.startswith("W_"):
+        name = name[2:]
+    for svc in _SERVICE_PREFIXES:
+        prefix = f"{svc}_"
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    field = name.lower()
+    return _KNOB_ALIASES.get(field, field)
+
+
+def _check_changes_are_resolvable(fault: Fault) -> str | None:
+    """静态校验：故障声明的 `changes` 必须能对上它自己的 `patches`。
+
+    这是**纯静态**的（不需要服务活着），所以可以放在最前面挡掉坏数据。
+
+    为什么必须有这道校验：`changes` 和 `patches` 是**两份手写的清单**，
+    它们之间唯一的联系是那个环境变量名 ——
+    写错了不会有任何报错，只会安静地写出 `from/to = null`，
+    然后污染整个场景数据（真实踩过，见 `_knob_of` 的注释）。
+    """
+    for ch in fault.changes:
+        target = ch["target"]
+        key = ch["key"]
+        patch = fault.patches.get(target)
+        if patch is None:
+            return (
+                f"{fault.id} 的变更记录指向 {target}，但该故障没有给 {target} 打任何补丁。\n"
+                f"  变更日志里的条目必须对应一次**真实的**参数改动。"
+            )
+        field = _knob_of(key)
+        if field not in patch:
+            return (
+                f"{fault.id} 的变更记录 {key} 推导出字段 {field!r}，"
+                f"但它不在 {target} 的补丁里：{sorted(patch)}\n"
+                f"  ⇒ 变更日志会写出 from/to = null（数据坏了，不是'难'）。\n"
+                f"  请修 _knob_of 的别名表，或改故障定义里的 key。"
+            )
+    return None
 
 
 def main() -> int:

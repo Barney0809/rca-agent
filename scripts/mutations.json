@@ -164,5 +164,68 @@
         ]
       }
     ]
+  },
+  "fault_catalog_integrity": {
+    "why": "A fault definition carries two hand-written lists: `patches` (what really changes) and `changes` (what gets written to the change log). Their only link is an env-var name, so a mismatch is silent: the scenario still runs and still writes data, but the change record comes out as `from: null, to: null`. That is corrupted data, not a harder scenario -- and it only shows up when a NEW fault is added, which is exactly when nobody is looking.",
+    "tests": ["tests/test_offline.py"],
+    "mutations": [
+      {
+        "id": "catalog-a-revert-to-hand-maintained-mapping",
+        "desc": "Restore the historical bug: map env-var names through a short hand-maintained dict with an env_key.lower() fallback. Then any newly added fault silently writes null change values.",
+        "file": "scripts/inject_fault.py",
+        "find": "    field = name.lower()\n    return _KNOB_ALIASES.get(field, field)",
+        "replace": "    return _KNOB_ALIASES.get(env_key, env_key.lower())",
+        "expect_red": [
+          "tests/test_offline.py::test_every_fault_change_entry_resolves_to_a_real_patch",
+          "tests/test_offline.py::test_knob_name_derivation_handles_the_awkward_names"
+        ]
+      },
+      {
+        "id": "catalog-b-drop-the-pool-size-alias",
+        "desc": "Drop the pool_size -> pool_limit alias, so F2's change key stops resolving. Shows the self-check covers aliased names too, not just derived ones.",
+        "file": "scripts/inject_fault.py",
+        "find": "_KNOB_ALIASES = {\n    \"pool_size\": \"pool_limit\",          # W_ORDER_POOL_SIZE → pool_limit\n}",
+        "replace": "_KNOB_ALIASES: dict = {}",
+        "expect_red": [
+          "tests/test_offline.py::test_every_fault_change_entry_resolves_to_a_real_patch"
+        ]
+      },
+      {
+        "id": "catalog-c-disarm-the-f7-precondition",
+        "desc": "#20: make the F7 precondition guard a no-op. F7's whole value is that the recorded change is causally irrelevant, which only holds while concurrency < pool capacity. A guard that no longer guards turns F7 back into F2's mistake.",
+        "file": "scripts/inject_fault.py",
+        "find": "    if concurrency >= pool_limit:",
+        "replace": "    if False:",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_20_f7_precondition_is_enforced_not_just_documented"
+        ]
+      }
+    ]
+  },
+  "invalidated_scenario_exclusion": {
+    "why": "#20: F2's ground truth was proven inverted by a control experiment, but the scenario is kept in the catalog as a documented counter-example. That creates a new risk -- the bad question keeps polluting every accuracy comparison, invisibly (you just think 'accuracy is low'). Excluding it must be a mechanism (a field + filtering in the aggregate + disclosure in the report), not a matter of remembering.",
+    "tests": ["tests/test_eval.py"],
+    "mutations": [
+      {
+        "id": "inval-a-aggregate-everything",
+        "desc": "Stop filtering invalidated scenarios out of the aggregate -- the historical behaviour, where a wrong question silently drags every number down.",
+        "file": "eval/runner.py",
+        "find": "        scored = [a for a in self.attempts if a.fault_id not in invalidated]",
+        "replace": "        scored = list(self.attempts)",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_20_invalidated_scenario_is_excluded_from_aggregate"
+        ]
+      },
+      {
+        "id": "inval-b-drop-the-disclosure",
+        "desc": "Keep excluding invalidated scenarios but stop reporting them. Then the reader believes every scenario was counted -- 'the number looks fine, but it is not measuring what you think'.",
+        "file": "eval/runner.py",
+        "find": "            \"invalidated\": invalidated,",
+        "replace": "            \"invalidated\": {},",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_20_exclusion_is_disclosed_not_silent"
+        ]
+      }
+    ]
   }
 }

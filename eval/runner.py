@@ -122,8 +122,22 @@ class Report:
     def agg(self) -> dict:
         if not self.attempts:
             return {}
+
+        # ⚠️ 作废的场景**不得参与聚合**（harness-log #20）。
+        #
+        # 为什么必须在聚合层挡：一处作废的题目如果留在数字里，
+        # 它会把**每一次**比较都污染一遍，而且看不出来 ——
+        # 你只会觉得"准确率怎么这么低"。
+        # 这是本项目"数字测的不是你以为的东西"家族的又一例。
+        invalidated = {
+            fid: SCENARIOS[fid].invalidated_reason
+            for fid in {a.fault_id for a in self.attempts}
+            if fid in SCENARIOS and SCENARIOS[fid].invalidated_reason
+        }
+        scored = [a for a in self.attempts if a.fault_id not in invalidated]
+
         by_fault: dict[str, list[Attempt]] = {}
-        for a in self.attempts:
+        for a in scored:
             by_fault.setdefault(a.fault_id, []).append(a)
 
         per_fault = {}
@@ -138,9 +152,11 @@ class Report:
                 "finished_rate": sum(1 for i in items if i.finished) / len(items),
             }
 
-        accs = [i.correct for i in self.attempts]
-        costs = [i.cost_yuan for i in self.attempts]
-        steps = [i.steps for i in self.attempts]
+        excluded = [a for a in self.attempts if a.fault_id in invalidated]
+
+        accs = [i.correct for i in scored]
+        costs = [i.cost_yuan for i in scored]
+        steps = [i.steps for i in scored]
 
         # ---- 噪声带 = 【轮与轮之间】的波动，不是"每一次尝试的最大最小值" ----
         #
@@ -150,7 +166,7 @@ class Report:
         #
         # 正确做法：先算每一轮的**聚合准确率**，再看这些轮之间的极差。
         by_round: dict[int, list[Attempt]] = {}
-        for a in self.attempts:
+        for a in scored:
             by_round.setdefault(a.round_no, []).append(a)
         round_acc = [
             sum(1 for a in items if a.correct) / len(items)
@@ -160,7 +176,7 @@ class Report:
         round_steps = [statistics.mean(a.steps for a in items) for items in by_round.values()]
 
         return {
-            "n_attempts": len(self.attempts),
+            "n_attempts": len(scored),
             "n_rounds": len(by_round),
             "accuracy": sum(accs) / len(accs),
             "accuracy_per_round": round_acc,
@@ -172,9 +188,13 @@ class Report:
             "mean_steps": statistics.mean(steps) if steps else 0.0,
             "steps_per_round": round_steps,
             "steps_band": self._band(round_steps),
-            "fully_converged_rate": sum(1 for i in self.attempts if i.finished) / len(accs),
-            "json_parse_rate": sum(1 for i in self.attempts if i.parse_ok) / len(accs),
+            "fully_converged_rate": sum(1 for i in scored if i.finished) / len(accs),
+            "json_parse_rate": sum(1 for i in scored if i.parse_ok) / len(accs),
             "per_fault": per_fault,
+            # ---- 被排除的作废场景（必须在报告里显式说出来）----
+            "invalidated": invalidated,
+            "n_excluded_attempts": len(excluded),
+            "n_attempts_total": len(self.attempts),
         }
 
     @staticmethod
@@ -214,6 +234,7 @@ def run(
     cross_exam_steps: int = 14,
     mode: str = "live",
     agent: str = "baseline",
+    include_invalidated: bool = False,
     verbose: bool = True,
 ) -> Report:
     cfg = LlmConfig.from_env()
@@ -250,6 +271,18 @@ def run(
         if score is None:
             if verbose:
                 print(f"  {fid}: 没有评分规则，跳过")
+            continue
+
+        # ⚠️ 作废的场景默认**不跑**（harness-log #20）。
+        #    理由有两条：
+        #      1. 跑了也没法用 —— 它的判分会把正确答案判错；
+        #      2. 跑它要花钱（每轮 ¥0.06~0.08），而钱应该花在有效的题上。
+        #    需要复现"我们出错过一道题"时才用 --include-invalidated。
+        if score.invalidated_reason and not include_invalidated:
+            if verbose:
+                print(f"  {fid}: ⛔ 场景已作废，跳过")
+                print(f"        理由：{score.invalidated_reason}")
+                print("        要强行跑它：加 --include-invalidated（结果不参与聚合）")
             continue
 
         for rnd in range(1, rounds + 1):
@@ -433,6 +466,15 @@ def print_report(report: Report) -> None:
     if agg["n_rounds"] < 3:
         print("  ⚠️ 轮数少于 3，噪声带不可信 —— 单轮结果只是在如实反映'没测出波动'")
     print()
+    # ⚠️ 作废的场景必须在报告里**显式说出来**，不能只是悄悄不显示。
+    #    否则读报告的人会以为"六/七个场景都算进去了"。
+    if agg.get("invalidated"):
+        print("  ⛔ 以下场景已作废，**不参与上面的任何数字**（harness-log #20）：")
+        for fid, reason in agg["invalidated"].items():
+            print(f"     {fid}：{reason}")
+        print(f"     （被排除 {agg['n_excluded_attempts']} 次尝试，"
+              f"本次共 {agg['n_attempts_total']} 次）")
+        print()
     print("  ── 三个数字 ──")
     band = agg["accuracy_band"]
     per_round = " → ".join(f"{v:.0%}" for v in agg["accuracy_per_round"])
@@ -515,6 +557,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--agent", choices=["baseline", "multi"], default="baseline",
                    help="baseline = 单 Agent；multi = 三个专职 Agent + 交叉质证 + 裁决")
     p.add_argument("--list-scenarios", action="store_true", help="只看有哪些场景可用")
+    p.add_argument("--include-invalidated", action="store_true",
+                   help="连**已作废**的场景一起跑（结果不参与聚合）。"
+                        "只在需要复现'某道题曾经出错过'时用")
     p.add_argument("--from-json", default=None,
                    help="从已保存的 results.json 重新出报告（不调用 LLM、不花钱）")
     args = p.parse_args(argv)
@@ -532,7 +577,14 @@ def main(argv: list[str] | None = None) -> int:
         runs = discover_runs()
         print("可用场景（runs/ 下每种故障的最新一次）：")
         for fid, d in runs.items():
-            print(f"  {fid:<4} {d.name}  {SCENARIOS[fid].label if fid in SCENARIOS else '(无评分规则)'}")
+            sc = SCENARIOS.get(fid)
+            if sc is None:
+                mark = "(无评分规则)"
+            elif sc.invalidated_reason:
+                mark = f"⛔ 已作废：{sc.label}"
+            else:
+                mark = sc.label
+            print(f"  {fid:<4} {d.name}  {mark}")
         return 0
 
     fault_ids = args.faults.split(",") if args.faults else None
@@ -544,6 +596,7 @@ def main(argv: list[str] | None = None) -> int:
         cross_exam_steps=args.cross_exam_steps,
         mode=args.mode,
         agent=args.agent,
+        include_invalidated=args.include_invalidated,
     )
     print_report(report)
     if report.attempts:
