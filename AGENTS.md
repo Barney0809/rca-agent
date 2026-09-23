@@ -246,6 +246,7 @@ extra_body={"thinking": {"type": "disabled"}}
 | `scripts/inject_fault.py` | 注入六种故障之一并记录变更事件 |
 | `scripts/reduce_run.py` | 遥测降维验证（产出压缩率证据） |
 | `scripts/mutate_check.py` | **变异检查**：证明回归用例真的能变红（`--list` 看所有变异组） |
+| `scripts/exp_pool_vs_latency.py` | **对照实验台**：控制变量验证场景声明的标准答案是否成立（零 LLM 成本） |
 | `eval/runner.py` | 评测运行器（`--agent baseline|multi`） |
 | `eval/rescore.py` | 用新评分规则**离线重算**历史结果（不花钱；同时用于检查"有没有误伤"） |
 
