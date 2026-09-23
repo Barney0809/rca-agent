@@ -126,6 +126,11 @@ class CrossExam:
             "changed": self.changed,
             "why_changed": self.why_changed,
             "parse_ok": self.parse_ok,
+            # ⚠️ `finished` 必须存。原本漏了它，于是 results.json 里
+            #    交叉质证只有 parse_ok 没有 finished，
+            #    报告说"收敛率 0%"时**根本查不出是哪个 Agent 没收敛**（harness-log #18）。
+            #    存档的价值就在于事后能定位问题；少一个字段就少一条线索。
+            "finished": self.finished,
             "steps": self.steps,
             "tool_calls": self.tool_calls,
             "cost_yuan": round(self.cost_yuan, 6),
@@ -165,12 +170,24 @@ def cross_examine(
     others: list[Hypothesis],
     *,
     model: str | None = None,
-    max_steps: int = 4,
+    max_steps: int,
 ) -> CrossExam:
     """让一个专职 Agent 对同事的结论做交叉质证。
 
     ⚠️ 它仍然**只能调自己那一个工具**（RestrictedToolBox）——
        交叉质证不该打开隔离的门。
+
+    ⚠️ `max_steps` 刻意**不给默认值** —— 调用方必须显式决定。
+
+       原因（harness-log #17）：这里原来写死 `max_steps=4`，而 `--max-steps`
+       根本到不了它。实测中指标 Agent 的交叉质证**正好用满 4 步**却没产出结论
+       （`parse_ok=False`），于是整体收敛率被记成 0%。
+       更糟的是报告据此建议"提高 `--max-steps` 重测" ——
+       而那个参数**改不动这个预算**，建议无效。
+
+       这正是 #13（随手定的 `max_steps` 改变了"准确率"）在另一个地方复发：
+       **一个没人量过的预算数字，会悄悄变成结论的一部分。**
+       所以这里不留默认值：要么显式传，要么报错。
     """
     local_ctx = ctx.fork()
     box = RestrictedToolBox(local_ctx, frozenset({role.tool}), role=role.key)
@@ -336,6 +353,13 @@ def adjudicate(
     model: str | None = None,
 ) -> Verdict:
     """协调者裁决。一次 LLM 调用，产出结构化结论。"""
+    # ⚠️ 这里**不能**传 max_tokens：`DeepSeekClient.chat()` 的签名里没有这个参数，
+    #    输出长度统一由 `config.max_tokens` 决定。
+    #    曾经在这里写了 `max_tokens=2048`，结果整个多 Agent 闭环跑完三个专职 Agent
+    #    和全部交叉质证（钱已经花了）之后，在**最后一步裁决**才抛：
+    #        TypeError: DeepSeekClient.chat() got an unexpected keyword argument 'max_tokens'
+    #    封堵见 tests/test_agents.py::test_every_chat_call_matches_the_client_signature
+    #    —— 那条用例会扫描全部 chat() 调用点并比对真实签名，这类错误不会再溜过去。
     result: LlmResult = client.chat(
         messages=[
             {"role": "system", "content": COORDINATOR_PROMPT},
@@ -344,7 +368,6 @@ def adjudicate(
         model=model,
         tools=None,          # 协调者不查数据 —— 它只裁决
         tag="coordinator",
-        max_tokens=2048,
     )
 
     v = Verdict(cost_yuan=result.cost_yuan, raw_text=result.text)
@@ -419,7 +442,7 @@ def diagnose_multi(
     *,
     model: str | None = None,
     max_steps: int = 14,
-    cross_exam_steps: int = 4,
+    cross_exam_steps: int = 14,
     roles: tuple[Role, ...] = ALL_ROLES,
 ) -> MultiAgentResult:
     """跑完整的多 Agent 流程：三个专员 → 交叉质证 → 协调者裁决。
@@ -431,6 +454,11 @@ def diagnose_multi(
 
     注意 `max_steps` 默认与 baseline 一致（14）——
         **对照实验里预算必须相同**，否则又是 harness-log #13 那个坑。
+
+    `cross_exam_steps` 当前也取 14，但**这是一个尚未实测校准的临时值**：
+        原先写死 4，实测发现指标 Agent 正好用满 4 步仍没产出结论（harness-log #17）。
+        先给足预算、保证"没跑完"不会被混进结论里；
+        真实需要多少步，由 D12 按实测分布定稿。
     """
     from concurrent.futures import ThreadPoolExecutor
 

@@ -217,3 +217,314 @@ def test_regression_13_warns_on_too_few_rounds(capsys):
     out = capsys.readouterr().out
 
     assert "噪声带不可信" in out, f"轮数不足时必须提示，实际：\n{out}"
+
+
+# ================================================================
+# #16 评分器把"被否掉的提及"算作命中
+# ================================================================
+#
+# 真实事故（D7，F2 第一次跑通多 Agent）：
+#
+#   协调者的裁决原文是：
+#     「…把 order 入口连接池容量砍到 2… 下游 payment 风控变慢只是并发的放大因素，
+#       不是触发者。」
+#
+#   它**采纳了红鲱鱼（配置变更）**，把真根因（外部风控变慢）当作被驳回的干扰项 ——
+#   但这句话里同时含"风控"和"变慢"，于是旧的纯关键词判定给出 **100%，判对**。
+#
+#   **多 Agent 实际上掉进了红鲱鱼陷阱，而分数说它答对了。**
+#
+# 这是 harness-log #11 #12 #13 的同一家族：数字算出来了，但测的不是那个东西。
+# 而且它比前几个更危险 —— 前面几个是"数字没意义"，这个是
+# **数字恰好把失败报成了成功**，直接指向错误的结论。
+
+F2_DISMISSED = (
+    "05:44:18 的配置变更 order.W_ORDER_POOL_SIZE 64→2 把 order 入口连接池容量砍到 2，"
+    "使 order 在正常并发下立即饱和（in_flight=2），97% 的 create_order 请求在 400ms 内"
+    "拿不到连接而失败；下游 payment 风控变慢只是并发的放大因素，不是触发者。"
+)
+
+F2_ASSERTED = (
+    "根因是外部风控响应变慢（单次约 801ms），它把 order 的每个请求都拖长，"
+    "导致池容量为 2 的 order 连接池被长时间占满；order 的池耗尽是被放大的后果，不是根因。"
+)
+
+
+def test_regression_16_dismissed_cause_is_not_a_hit():
+    """核心：把真根因当干扰项排除掉的答案，必须判错。"""
+    from eval.scenarios import SCENARIOS
+
+    sc = SCENARIOS["F2"]
+    ok, _ = sc.judge(F2_DISMISSED)
+
+    assert ok is False, (
+        "这段裁决**采纳了红鲱鱼**、把真根因（外部风控变慢）明确降级成了干扰项，"
+        "必须是判错。旧的纯关键词判定会判对 —— 那正是这个缺陷。"
+    )
+    # 说明文字要指出"词出现了但被否掉了"，而不是含糊地说"缺少关键概念"
+    why = sc.explain(F2_DISMISSED)
+    assert "被否掉" in why or "降级" in why, f"说明没有指出真正的问题：{why}"
+
+
+def test_regression_16_asserted_cause_is_still_a_hit():
+    """正向对照：正常主张真根因的答案，必须判对。
+
+    没有这一条，"判错"可能只是"永远判错"造成的假绿。
+    """
+    from eval.scenarios import SCENARIOS
+
+    ok, _ = SCENARIOS["F2"].judge(F2_ASSERTED)
+    assert ok is True, "这是标准答案的写法，不该判错"
+
+
+def test_regression_16_negation_inside_a_clause_is_handled():
+    """反向保护：**否定/让步和真答案在同一句、但在不同小句**时不能误伤。
+
+    这是很自然的正确措辞：
+        「order 的连接池只是被放大的脆弱点，真正的根因是外部风控变慢。」
+
+    这一句里**同时**有让步标记（"只是"）和真关键词（"风控"+"变慢"）。
+    如果只按句号切、把整句当一个整体看，它会因为含"只是"被判定成
+    "在否掉风控" —— **把对的答案判成错的**。
+
+    误伤比漏判更糟：它会让本来正确的 Agent 显得无能，而且很难被发现
+    （分数变低总是容易被归因成"模型不行"）。
+
+    所以判定必须切到**小句**级别（逗号也切）：
+        前半句被让步标记否掉、后半句正常主张 ⇒ 判对。
+
+    ⚠️ 这条用例的文本是**特意挑的**：
+       必须让"只按句号切"和"按逗号也切"得出**不同结果**，否则它什么都测不出来。
+       （第一版用的是「根因不是 A，而是 B」，那种写法里没有任何让步标记，
+         两种切法结论相同 —— 变异测试当场证明那条用例是装饰品。）
+    """
+    from eval.scenarios import SCENARIOS
+
+    text = "order 的连接池只是被放大的脆弱点，真正的根因是外部风控变慢。"
+    ok, _ = SCENARIOS["F2"].judge(text)
+    assert ok is True, (
+        "「A 只是症状，真正的根因是 B」这种写法不能被误伤 —— "
+        "注意这里的让步标记和真关键词在**同一句**里"
+    )
+
+    # 同时保留"否定 + 转折"的写法（另一种常见的正确措辞）
+    text2 = "根因不是 order 的连接池，而是外部风控变慢。"
+    ok2, _ = SCENARIOS["F2"].judge(text2)
+    assert ok2 is True, "「不是 A，而是 B」这种否定+转折的写法也不能被误伤"
+
+
+def test_regression_16_old_behaviour_is_still_reachable():
+    """`dismissal_aware=False` 必须能退回旧行为 —— 用来量化"改了多少结论"。
+
+    历史数字不能因为改了规则就悄悄变化：得能同时算出新旧两版，
+    才能说清"哪几条结论变了、为什么变"（工具是 `eval/rescore.py`）。
+    """
+    from eval.scenarios import SCENARIOS
+
+    sc = SCENARIOS["F2"]
+    old_ok, _ = sc.judge(F2_DISMISSED, dismissal_aware=False)
+    new_ok, _ = sc.judge(F2_DISMISSED, dismissal_aware=True)
+
+    assert old_ok is True, "旧行为应当判对（这正是要被修正的假阳性）"
+    assert new_ok is False, "新行为应当判错"
+    assert old_ok != new_ok, "这条用例的价值就在于两种行为**确实不同**"
+
+
+# ================================================================
+# #17 交叉质证的步数预算没有接线到 --max-steps
+# ================================================================
+#
+# 真实事故：`cross_examine(..., max_steps=4)` 是写死的默认值，
+#   `--max-steps` 根本到不了它。实测中指标 Agent 的交叉质证**正好用满 4 步**
+#   却没产出结构化结论（parse_ok=False）→ 整体收敛率被记成 0%。
+#
+# 更糟的是报告据此建议"提高 --max-steps 重测" —— 而那个参数改不动这个预算，
+# **照着建议做会白花一遍钱**。这是 #13 在另一个地方复发：
+# 一个没人量过的预算数字，会悄悄变成结论的一部分。
+
+
+def test_regression_17_cross_examine_has_no_default_step_budget():
+    """结构面：`cross_examine` 不许有默认步数预算。
+
+    有默认值 = 调用方可以什么都不想就用上它，而这正是事故的成因。
+    要求显式传参，等于强制调用方**做一次决定**。
+    """
+    import inspect
+
+    from rca.agents.coordinator import cross_examine
+
+    params = inspect.signature(cross_examine).parameters
+    assert "max_steps" in params, "cross_examine 应当接受 max_steps"
+    assert params["max_steps"].default is inspect.Parameter.empty, (
+        "cross_examine 的 max_steps 不许有默认值 —— 写死 4 的那个坑（harness-log #17）"
+        "就是默认值造成的。调用方必须显式决定步数预算。"
+    )
+
+
+def test_regression_17_runner_passes_cross_exam_steps_downstream():
+    """行为面：runner 的 `cross_exam_steps` 必须真的传到 `diagnose_multi`。
+
+    只改 CLI 参数名、不接线，是这个缺陷最可能的复发方式 ——
+    参数看起来存在、能设置、却没有任何效果。所以这里拦住 `diagnose_multi`
+    并把**实际收到的参数**记下来核对。
+    """
+    from unittest.mock import patch
+
+    from eval.runner import _run_multi_slice
+    from eval.scenarios import SCENARIOS
+    from rca.agents.coordinator import MultiAgentResult
+
+    captured: dict = {}
+
+    def fake_diagnose(client, ctx, **kwargs):
+        captured.update(kwargs)
+        return MultiAgentResult()
+
+    with patch("rca.agents.coordinator.diagnose_multi", fake_diagnose):
+        _run_multi_slice(
+            client=None, ctx=None, fid="F2", rnd=1, score=SCENARIOS["F2"],
+            model=None, max_steps=7, cross_exam_steps=11,
+        )
+
+    assert captured.get("cross_exam_steps") == 11, (
+        f"cross_exam_steps 没有传到 diagnose_multi（实收 {captured}）。"
+        "参数存在但没有效果，与这个缺陷本身等价。"
+    )
+    assert captured.get("max_steps") == 7, f"max_steps 也应原样传下去（实收 {captured}）"
+
+
+def test_regression_17_warning_points_at_the_right_knob(capsys):
+    """报告在多 Agent 未收敛时，必须指出**两个**预算旋钮，而不是只提 --max-steps。
+
+    原来只说"提高 --max-steps"，而实测没收敛的是交叉质证 ——
+    照着建议做会白花钱。**给出无法生效的建议，比不给建议更坏。**
+    """
+    from eval.runner import print_report
+
+    attempt = _attempt(round_no=1, correct=False, finished=False)
+    attempt.detail = {
+        "hypotheses": [{"role": "logs", "finished": True, "steps": 6}],
+        "cross_exams": [{"role": "metrics", "finished": False, "steps": 4}],
+        "verdict": {"parse_ok": True},
+    }
+    report = _report([attempt], rounds=3)
+    report.agent = "multi"
+
+    print_report(report)
+    out = capsys.readouterr().out
+
+    assert "cross-exam-steps" in out, f"必须指出交叉质证的旋钮，实际：\n{out}"
+    assert "metrics" in out, f"必须指出是哪个环节没收敛，实际：\n{out}"
+
+
+# ================================================================
+# #18 存档漏字段 → 报告说"没收敛"却查不出是谁
+# ================================================================
+#
+# 真实事故：`CrossExam.to_dict()` 没保存 `finished`，
+#   于是 results.json 里交叉质证只有 parse_ok，
+#   报告说"收敛率 0%"时**根本查不出是哪个 Agent 没收敛**。
+#   存档的价值就在于事后定位问题；少一个字段就少一条线索。
+
+
+def test_regression_18_cross_exam_snapshot_records_finished():
+    from rca.agents.coordinator import CrossExam
+
+    x = CrossExam(role="metrics", original_claim="x", finished=False, parse_ok=False, steps=4)
+    d = x.to_dict()
+
+    assert "finished" in d, (
+        "CrossExam 的存档必须包含 finished —— 否则报告说'没收敛'时无法定位是哪个角色"
+    )
+    assert d["finished"] is False
+    assert d["steps"] == 4, "同时要能看到它用了几步（判断是不是撞了预算上限）"
+
+
+# ================================================================
+# #19 存档把结论截断，导致判定无法复核（违反 FR-C 可复现）
+# ================================================================
+#
+# 真实事故：`root_cause=diag.root_cause[:400]` —— 存的是**截断文本**，
+#   而 `correct` 是按**全文**算的。后果：
+#   18 条里正好有 2 条（F4 第2轮、F5 第2轮，文本恰好 400 字符整），
+#   用存档文本重新判一遍会得到**不同的结论**。
+#
+#   也就是说：**存档的证据无法复核它自己记录的判定。**
+#   面试官拿到 results.json，本该能自己重算每个数字，而不是只能相信里面的布尔值。
+#
+#   发现方式：`eval/rescore.py` 逐条比对"存档里的 correct"与"用存档文本重算的判定"。
+
+
+def test_regression_19_saved_report_can_reproduce_its_own_verdict(tmp_path, monkeypatch):
+    """核心不变量：**用存档文本重算，必须得到存档里那个判定。**
+
+    这条不变量比"某个字段没被截断"更本质 —— 它直接表达"存档可以复核自己"，
+    因此任何形式的证据丢失（截断、编码、丢字段）都会被它抓到。
+    """
+    import json
+
+    from eval.runner import load_report, save_report
+    from eval.scenarios import SCENARIOS
+
+    sc = SCENARIOS["F1"]
+    # 造一段**远超 400 字符**的结论，且关键词只出现在**后面** ——
+    # 只要存档截断，重算就会判错。
+    long_text = "先是一大段与判定无关的铺垫。" * 40 + "根因是外部依赖风控变慢。"
+    assert len(long_text) > 500, "构造的文本必须超过旧的 400 字符截断线"
+
+    attempt = _attempt(fault_id="F1", round_no=1, correct=sc.judge(long_text)[0])
+    attempt.root_cause = long_text
+    report = _report([attempt])
+
+    monkeypatch.setattr("eval.runner.RUNS_DIR", tmp_path)
+    path = save_report(report)
+    reloaded = load_report(path)
+
+    stored = reloaded.attempts[0]
+    assert stored.root_cause == long_text, (
+        f"存档把结论截断了（{len(stored.root_cause)} 字符，原文 {len(long_text)}）—— "
+        "存档的证据必须能复核它自己的判定（FR-C 可复现）"
+    )
+    recomputed, _ = sc.judge(stored.root_cause)
+    assert recomputed == stored.correct, (
+        "用存档文本重算得到的判定与存档里记录的不一致 —— 存档无法自证"
+    )
+    assert recomputed is True, "这段文本是正确答案，重算应当是判对"
+
+
+def test_regression_19_baseline_slice_stores_the_whole_verdict():
+    """行为面：**截断发生的那一行**必须被直接覆盖。
+
+    ⚠️ 这条用例是补写的。第一版只测了 `save_report` / `load_report` 的往返，
+       结果变异测试当场证明它抓不到截断 —— 因为截断发生在
+       `_run_baseline_slice` 里，而那条用例根本没走到那里。
+       **存档层是好的，坏的是构造存档的那一层。**
+
+       这正是"变异测试"的价值：它不问"用例绿不绿"，只问"缺陷回填后它还绿不绿"。
+    """
+    from types import SimpleNamespace
+
+    from eval.runner import _run_baseline_slice
+    from eval.scenarios import SCENARIOS
+
+    sc = SCENARIOS["F1"]
+    full_text = "先是一大段与判定无关的铺垫。" * 40 + "根因是外部依赖风控变慢。"
+    assert len(full_text) > 500, "构造的文本必须超过旧截断线（400 字符）"
+
+    class FakeBaseline:
+        def diagnose(self, ctx):
+            return SimpleNamespace(
+                root_cause=full_text,
+                steps=3, tool_calls=5, cost_yuan=0.01,
+                input_tokens=1, output_tokens=1, elapsed_s=1.0,
+                finished=True, parse_ok=True,
+            )
+
+    attempt = _run_baseline_slice(FakeBaseline(), ctx=None, fid="F1", rnd=1, score=sc)
+
+    assert attempt.root_cause == full_text, (
+        f"存档只留下 {len(attempt.root_cause)} 字符（原文 {len(full_text)}）—— "
+        "结论被截断了，而 correct 是按全文算的，于是存档无法复核自己的判定"
+    )
+    recomputed, _ = sc.judge(attempt.root_cause)
+    assert recomputed == attempt.correct, "用存档文本重算必须得到存档里记录的判定"

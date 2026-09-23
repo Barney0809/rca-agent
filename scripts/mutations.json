@@ -62,5 +62,107 @@
         ]
       }
     ]
+  },
+  "chat_call_signature": {
+    "why": "A call site passed max_tokens=2048 to DeepSeekClient.chat(), whose signature has no such parameter. No unit test could reach it (the adjudication step costs real API calls), so it only exploded after the whole multi-agent loop had run and the money was already spent. The seal is a static check that every chat() call site matches the real signature.",
+    "tests": ["tests/test_agents.py"],
+    "mutations": [
+      {
+        "id": "sig-a-reinject-max-tokens-in-adjudicate",
+        "desc": "Re-inject the historical defect: pass max_tokens=2048 to chat() inside adjudicate().",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "        tools=None,          # 协调者不查数据 —— 它只裁决\n        tag=\"coordinator\",\n    )",
+        "replace": "        tools=None,          # 协调者不查数据 —— 它只裁决\n        tag=\"coordinator\",\n        max_tokens=2048,\n    )",
+        "expect_red": [
+          "tests/test_agents.py::test_every_chat_call_matches_the_client_signature"
+        ]
+      },
+      {
+        "id": "sig-b-unknown-kwarg-in-another-file",
+        "desc": "Inject a bogus kwarg at the call site in specialist.py instead. If the check only looked at coordinator.py, this mutant would stay green.",
+        "file": "src/rca/agents/specialist.py",
+        "find": "                tag=f\"specialist/{self.role.key}/{local_ctx.run_id}\",\n            )",
+        "replace": "                tag=f\"specialist/{self.role.key}/{local_ctx.run_id}\",\n                max_tokens=1024,\n            )",
+        "expect_red": [
+          "tests/test_agents.py::test_every_chat_call_matches_the_client_signature"
+        ]
+      }
+    ]
+  },
+  "scoring_and_reproducibility": {
+    "why": "Three separate ways the D7 measurement lied: (#16) the keyword scorer counted a mention that the answer explicitly DISMISSED, so the multi-agent run was scored 100% while it had actually fallen for the red herring; (#17) the cross-examination step budget was hardcoded to 4 and not wired to --max-steps, while the report told the user to raise --max-steps; (#18) CrossExam snapshots omitted `finished`, so a 'convergence 0%' report could not say which role failed; (#19) root_cause was truncated to 400 chars while `correct` was computed on the full text, so 2 of 18 stored verdicts could not be reproduced from their own archive.",
+    "tests": ["tests/test_eval.py"],
+    "mutations": [
+      {
+        "id": "score-a-ignore-dismissal-context",
+        "desc": "#16: remove the dismissal check, so a keyword counts even when the answer explicitly rejects it. This is exactly how the red-herring verdict was scored 100%.",
+        "file": "eval/scenarios.py",
+        "find": "                if any(m in clause for m in DISMISSAL_MARKERS):\n                    continue\n",
+        "replace": "                # mutation: dismissal check removed (pre-#16 behaviour)\n",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_16_dismissed_cause_is_not_a_hit"
+        ]
+      },
+      {
+        "id": "score-b-split-on-sentences-only",
+        "desc": "#16 follow-up: split only on sentence punctuation, not on commas. Then 'the root cause is NOT the pool, but the slow risk service' is read as one sentence containing a negation, and a CORRECT answer gets marked wrong. Guards against over-correcting into false negatives.",
+        "file": "eval/scenarios.py",
+        "find": "_CLAUSE_SPLIT = re.compile(r\"[。！？；;，,\\n]\")",
+        "replace": "_CLAUSE_SPLIT = re.compile(r\"[。！？；;\\n]\")",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_16_negation_inside_a_clause_is_handled"
+        ]
+      },
+      {
+        "id": "wire-a-restore-default-cross-exam-budget",
+        "desc": "#17: give cross_examine a default step budget again (4, as it was). A default lets a caller spend a budget nobody measured without deciding anything.",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "    model: str | None = None,\n    max_steps: int,\n) -> CrossExam:",
+        "replace": "    model: str | None = None,\n    max_steps: int = 4,\n) -> CrossExam:",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_17_cross_examine_has_no_default_step_budget"
+        ]
+      },
+      {
+        "id": "wire-b-stop-passing-cross-exam-steps",
+        "desc": "#17: keep the CLI flag but stop passing it down. A parameter that exists, can be set, and has no effect is equivalent to the original defect.",
+        "file": "eval/runner.py",
+        "find": "    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps,\n                         cross_exam_steps=cross_exam_steps)",
+        "replace": "    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps)",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_17_runner_passes_cross_exam_steps_downstream"
+        ]
+      },
+      {
+        "id": "snap-a-drop-finished-from-cross-exam",
+        "desc": "#18: drop `finished` from the CrossExam snapshot again, so a 'convergence 0%' report cannot say which role failed to converge.",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "            \"finished\": self.finished,\n            \"steps\": self.steps,",
+        "replace": "            \"steps\": self.steps,",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_18_cross_exam_snapshot_records_finished"
+        ]
+      },
+      {
+        "id": "snap-b-truncate-root-cause-again",
+        "desc": "#19: truncate root_cause to 400 chars again while `correct` keeps being computed on the full text -- the stored evidence then cannot reproduce its own verdict.",
+        "file": "eval/runner.py",
+        "find": "        root_cause=diag.root_cause,\n        steps=diag.steps,",
+        "replace": "        root_cause=diag.root_cause[:400],\n        steps=diag.steps,",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_19_baseline_slice_stores_the_whole_verdict"
+        ]
+      },
+      {
+        "id": "snap-c-truncate-in-snapshot-layer",
+        "desc": "#19, other layer: truncate inside Attempt.to_dict() instead -- the plausible version of this mistake ('results.json is getting big, let's trim it'). Guards the save/load round-trip invariant, which the slice-level test does not cover.",
+        "file": "eval/runner.py",
+        "find": "    def to_dict(self) -> dict:\n        return self.__dict__.copy()",
+        "replace": "    def to_dict(self) -> dict:\n        d = self.__dict__.copy()\n        d[\"root_cause\"] = d[\"root_cause\"][:400]\n        return d",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_19_saved_report_can_reproduce_its_own_verdict"
+        ]
+      }
+    ]
   }
 }

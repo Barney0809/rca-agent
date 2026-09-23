@@ -28,7 +28,59 @@ LLM 裁判放到 D10 的评测 harness 里作为补充（需求 FR-4 也要求�
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+
+# ================================================================
+# 关键修正：关键词必须出现在**主张**它的地方，不能出现在**否掉**它的地方
+# ================================================================
+#
+# 真实事故（D7，F2 第一次跑通多 Agent）：
+#
+#   协调者的裁决文本是：
+#     「…把 order 入口连接池容量砍到 2… 下游 payment 风控变慢只是并发的放大因素，
+#       不是触发者。」
+#
+#   它**采纳了红鲱鱼（配置变更）**，把真根因（外部风控变慢）当作被驳回的干扰项 ——
+#   但这句话里同时含"风控"和"变慢"，于是旧的纯关键词判定给出 **100%，判对**。
+#
+#   **多 Agent 实际上掉进了红鲱鱼陷阱，而分数说它答对了。**
+#
+# 这类错误和 harness-log #11 #12 #13 是同一族：
+#   **数字算出来了，但它测的不是你以为的那个东西。**
+#
+# 修正思路（保持确定性、零成本、可审计，不引入 LLM 裁判）：
+#   1. 把文本切成**小句**（按句号和逗号都切）
+#   2. 一个小句只有在包含关键词、**且不含否定/让步标记**时，才算"主张"
+#   3. 某一组只要有**任意一个**小句是"主张"，就算该组命中
+#
+# 为什么按逗号也切：中文里"否掉"和"主张"经常在同一句里靠逗号分开，例如
+#   「根因不是 order 的连接池，而是外部风控变慢」→ 切完第一段被标记否掉、
+#   第二段正常主张 ⇒ 判对。（若只按句号切，这一句会因含"不是"而整句被误判。）
+#
+# 标记表刻意**只收明确的否定/让步词**。宁可漏判（把该否掉的当主张），
+# 也不要误伤（把正常主张判成否定）—— 后者会让本来就对的答案变错。
+
+DISMISSAL_MARKERS: tuple[str, ...] = (
+    "不是根因",
+    "不是原因",
+    "不是触发",
+    "不是问题",
+    "非根因",
+    "并非",
+    "被排除",
+    "排除",
+    "驳回",
+    "被证伪",
+    "无法解释",
+    "不成立",
+    "只是",
+    "仅是",
+    "次要",
+    "放大因素",
+)
+
+_CLAUSE_SPLIT = re.compile(r"[。！？；;，,\n]")
 
 
 @dataclass(frozen=True)
@@ -42,23 +94,59 @@ class ScenarioScore:
     # 常见的错误结论（用于分析"错在哪里"，不参与判定）
     common_wrong: tuple[str, ...] = field(default=())
 
-    def judge(self, text: str) -> tuple[bool, list[bool]]:
+    def judge(self, text: str, *, dismissal_aware: bool = True) -> tuple[bool, list[bool]]:
         """返回 (是否答对, 每组的命中情况)。
 
         ⚠️ 大小写不敏感 —— 模型可能写 "Order" 也可能写 "order"。
+
+        `dismissal_aware=False` 可以退回旧的纯关键词行为 ——
+        保留它是为了**能量化这次修正改变了多少结论**（见 eval/rescore.py），
+        而不是让历史数字悄悄变化。
         """
-        low = text.lower()
-        hits = [any(kw.lower() in low for kw in group) for group in self.keyword_groups]
+        if not dismissal_aware:
+            low = text.lower()
+            hits = [any(kw.lower() in low for kw in group) for group in self.keyword_groups]
+            return all(hits), hits
+
+        clauses = [c for c in _CLAUSE_SPLIT.split(text) if c.strip()]
+
+        hits = []
+        for group in self.keyword_groups:
+            found = False
+            for clause in clauses:
+                low_clause = clause.lower()
+                if not any(kw.lower() in low_clause for kw in group):
+                    continue
+                # 关键词在场的这一小句，是在否掉这个原因吗？
+                if any(m in clause for m in DISMISSAL_MARKERS):
+                    continue
+                found = True
+                break
+            hits.append(found)
         return all(hits), hits
 
     def explain(self, text: str) -> str:
         ok, hits = self.judge(text)
         if ok:
-            return "✅ 命中全部关键词组"
+            return "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）"
         missed = [
             "/".join(group) for group, hit in zip(self.keyword_groups, hits) if not hit
         ]
-        return "❌ 缺少关键概念：" + "；".join(missed)
+        detail = "；".join(missed)
+
+        # 一个特别值得单独指出的情况：词**出现了**，但**出现在被否掉的小句里**。
+        # 这正是"看起来答对了、其实答反了"的那种答案（见文件开头的真实事故）。
+        dismissed = [
+            "/".join(group)
+            for group, hit in zip(self.keyword_groups, hits)
+            if not hit and any(kw.lower() in text.lower() for kw in group)
+        ]
+        if dismissed:
+            return (
+                f"❌ 关键词出现了，但**出现在被否掉/降级的位置**：{'；'.join(dismissed)}"
+                "（即：它把这几个概念当作干扰项排除掉了）"
+            )
+        return "❌ 缺少关键概念：" + detail
 
 
 SCENARIOS: dict[str, ScenarioScore] = {

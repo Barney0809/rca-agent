@@ -318,3 +318,97 @@ def _coordinator_ast() -> ast.Module:
         / "src" / "rca" / "agents" / "coordinator.py"
     ).read_text(encoding="utf-8")
     return ast.parse(src)
+
+
+# ================================================================
+# 所有 client.chat(...) 调用点的参数必须与真实签名一致
+# ================================================================
+#
+# 真实缺陷：`adjudicate()` 里写了 `max_tokens=2048`，
+# 但 `DeepSeekClient.chat()` 的签名里**没有这个参数**（输出长度统一由 config 决定）。
+#
+# 为什么这条特别值得立一组用例：
+#
+#   它**不在代码写错的那一刻暴露，也不在任何单测里暴露** ——
+#   因为没有任何单测会真的走到"裁决"这一步（那要发网络请求）。
+#   它只在**真正跑完整个多 Agent 闭环**的时候才炸，
+#   而此时三个专职 Agent 和全部交叉质证都已经跑完、**钱已经花了**。
+#
+#   实测就是这样：F2 跑到最后一步裁决才抛
+#       TypeError: DeepSeekClient.chat() got an unexpected keyword argument 'max_tokens'
+#
+# 单测里"复现"这个场景要花钱，所以这里换一个更根本、而且**零成本**的做法：
+#   不测某一次调用的行为，而是**静态检查全部调用点的参数名**。
+#   这样"参数名写错 / 参数被删掉 / 传了位置参数"这一整类错误都会被抓住，
+#   而不只是这一处。
+
+
+def _chat_call_sites() -> list[tuple[Path, ast.Call]]:
+    """全仓库所有 `xxx.chat(...)` 调用点。
+
+    ⚠️ 只匹配 `Call(func=Attribute(attr="chat"))`。
+    底层 SDK 的用法是 `client.chat.completions.create(...)`，
+    它的 func.attr 是 `create`，因此**不会**被误匹配进来。
+    """
+    out: list[tuple[Path, ast.Call]] = []
+    roots = [Path(__file__).resolve().parent.parent / d for d in ("src", "eval", "scripts")]
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "chat"
+                ):
+                    out.append((path, node))
+    return out
+
+
+def test_every_chat_call_matches_the_client_signature() -> None:
+    """结构面：所有 `chat(...)` 调用点的参数必须是签名里真实存在的。"""
+    import inspect
+
+    from rca.llm.provider import DeepSeekClient
+
+    params = inspect.signature(DeepSeekClient.chat).parameters
+    allowed = set(params)
+
+    problems: list[str] = []
+
+    for path, node in _chat_call_sites():
+        where = f"{path.relative_to(Path(__file__).resolve().parent.parent)}:{node.lineno}"
+
+        # chat() 是 keyword-only 的（签名里有裸 `*`），所以位置参数一律是错的
+        if node.args:
+            problems.append(f"{where} 传了 {len(node.args)} 个位置参数，但 chat() 是 keyword-only")
+
+        for kw in node.keywords:
+            if kw.arg is None:                       # **kwargs 展开，静态看不出来
+                continue
+            if kw.arg not in allowed:
+                problems.append(
+                    f"{where} 传了未知参数 `{kw.arg}`；"
+                    f"chat() 只接受：{sorted(allowed)}"
+                )
+
+    assert not problems, (
+        "以下 chat() 调用点的参数与真实签名不符。\n"
+        "这类错误**单测抓不到**（单测不会真的发请求），"
+        "只会在跑完整闭环、钱都花完之后，在最后一步才炸：\n  "
+        + "\n  ".join(problems)
+    )
+
+
+def test_the_chat_signature_check_actually_found_call_sites() -> None:
+    """元测试：确认上面不是"扫了 0 个调用点"造成的假绿。"""
+    sites = _chat_call_sites()
+    where = sorted(
+        f"{p.name}:{n.lineno}" for p, n in sites
+    )
+    assert len(sites) >= 4, f"只扫到 {len(sites)} 个 chat() 调用点：{where}"
+    assert any(p.name == "coordinator.py" for p, _ in sites), (
+        "没扫到 coordinator.py 里的 chat() 调用点，路径规则可能错了"
+    )

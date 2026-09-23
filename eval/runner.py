@@ -211,6 +211,7 @@ def run(
     rounds: int = 3,
     model: str | None = None,
     max_steps: int = 14,
+    cross_exam_steps: int = 14,
     mode: str = "live",
     agent: str = "baseline",
     verbose: bool = True,
@@ -257,7 +258,8 @@ def run(
             ctx = RunContext.from_run_dir(run_dir)
 
             if agent == "multi":
-                attempt = _run_multi_slice(client, ctx, fid, rnd, score, model, max_steps)
+                attempt = _run_multi_slice(client, ctx, fid, rnd, score, model,
+                                           max_steps, cross_exam_steps)
             else:
                 attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score)
 
@@ -289,7 +291,19 @@ def _run_baseline_slice(
         round_no=rnd,
         correct=correct,
         explanation=score.explain(diag.root_cause),
-        root_cause=diag.root_cause[:400],
+        # ⚠️ 存**全文**，不许截断。
+        #
+        # 这里原本是 `diag.root_cause[:400]`，而 `correct` 是按**全文**算的。
+        # 后果：结论超过 400 字符时，存档里的文本重新判一遍会得出**不同的结论** ——
+        # 18 条里正好有 2 条是这样（F4 第2轮、F5 第2轮，都是 400 字符整）。
+        #
+        # 也就是说：**存档的证据无法复核它自己记录的判定**。
+        # 这直接违反需求 FR-C（可复现）：面试官拿到 results.json，
+        # 应该能自己重算每一个数字，而不是只能相信里面写的布尔值。
+        #
+        # 发现方式：`eval/rescore.py` 用新规则重算历史结果时，
+        # 逐条比对"存档里的 correct"与"用存档文本重算的判定"，对不上才暴露出来。
+        root_cause=diag.root_cause,
         steps=diag.steps,
         tool_calls=diag.tool_calls,
         cost_yuan=diag.cost_yuan,
@@ -309,6 +323,7 @@ def _run_multi_slice(
     score: ScenarioScore,
     model: str | None,
     max_steps: int,
+    cross_exam_steps: int,
 ) -> Attempt:
     """跑一次完整的多 Agent 流程（三轮：调查 → 交叉质证 → 裁决）。
 
@@ -317,7 +332,8 @@ def _run_multi_slice(
     """
     from rca.agents.coordinator import diagnose_multi
 
-    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps)
+    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps,
+                         cross_exam_steps=cross_exam_steps)
     verdict_text = res.verdict.root_cause
     correct, _ = score.judge(verdict_text)
 
@@ -326,7 +342,8 @@ def _run_multi_slice(
         round_no=rnd,
         correct=correct,
         explanation=score.explain(verdict_text),
-        root_cause=verdict_text[:400],
+        # 存全文，理由同 `_run_baseline_slice`（截断会让判定无法复核）
+        root_cause=verdict_text,
         # 统一口径：steps = 总 LLM 调用次数（baseline 的 steps 也是 LLM 轮次）
         steps=res.n_llm_calls,
         tool_calls=res.total_tool_calls,
@@ -372,6 +389,37 @@ def load_report(path: Path) -> Report:
     return report
 
 
+def _convergence_breakdown(report: Report) -> list[str]:
+    """列出多 Agent 每个环节的 finished / steps —— 用来定位"到底是哪个环节没收敛"。
+
+    为什么值得单独做：多 Agent 的收敛率是**四个环节的合取**
+    （3 个调查 + 3 个质证 + 1 次裁决），只说"收敛率 0%"等于什么也没说。
+    harness-log #18 就是存档里漏了 `finished` 字段，
+    导致报告说"没收敛"却查不出是谁 —— 存档的价值就在于事后能定位。
+    """
+    lines: list[str] = []
+    for a in report.attempts:
+        det = a.detail or {}
+        bad: list[str] = []
+        for h in det.get("hypotheses", []) or []:
+            if not h.get("finished"):
+                bad.append(f"调查/{h.get('role')}(steps={h.get('steps')})")
+        for c in det.get("cross_exams", []) or []:
+            if not c.get("finished"):
+                bad.append(f"质证/{c.get('role')}(steps={c.get('steps')})")
+        v = det.get("verdict") or {}
+        if v and not v.get("parse_ok"):
+            bad.append("裁决(未产出结构化结论)")
+        if bad:
+            lines.append(f"       {a.fault_id} 第{a.round_no}轮：{'、'.join(bad)}")
+    if not lines:
+        lines.append(
+            "       （detail 里没有各环节的 finished 记录 —— 可能是旧存档；"
+            "见 harness-log #18）"
+        )
+    return lines
+
+
 def print_report(report: Report) -> None:
     agg = report.agg()
     if not agg:
@@ -406,7 +454,20 @@ def print_report(report: Report) -> None:
         print()
         print("  ⚠️ 收敛率不足 100% ⇒ **准确率不可用于比较**。")
         print("     未收敛的尝试会被记成「答错」，但那是配置问题（步数预算不足），")
-        print("     不是模型的归因能力问题。请提高 --max-steps 后重测，再做比较。")
+        print("     不是模型的归因能力问题。")
+        # ⚠️ 这里**必须说清是哪个预算不够**（harness-log #17）。
+        #    多 Agent 的步数预算有两个旋钮，原来这条建议只说 --max-steps ——
+        #    而实测中没收敛的是**交叉质证**，改 --max-steps 根本改不动它，
+        #    照着建议做会白花一遍钱还得不到结论。
+        if report.agent == "multi":
+            print("     多 Agent 有**两个**步数预算，先看清楚是哪个撞了：")
+            print("       · 调查轮（三个专职 Agent）  → --max-steps")
+            print("       · 交叉质证轮（三个质证发言）→ --cross-exam-steps")
+            print("     下面列出每个环节的 finished / steps，据此定位：")
+            for line in _convergence_breakdown(report):
+                print(line)
+        else:
+            print("     请提高 --max-steps 后重测，再做比较。")
     print()
     print("  ── 逐个场景 ──")
     print(f"  {'ID':<4} {'场景':<30} {'准确率':<8} {'步数':<6} {'工具':<6} {'成本':<10}")
@@ -442,6 +503,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-steps", type=int, default=14,
                    help="LLM 轮次上限；实测最慢场景需 9 步，故默认 14。"
                         "⚠️ 比较 baseline 与 multi 时必须用同一个值")
+    # ⚠️ 这个旋钮必须存在且必须接线（harness-log #17）。
+    #    原先交叉质证的步数预算在 coordinator.py 里写死 4，--max-steps 到不了它；
+    #    实测中指标 Agent 正好用满 4 步仍没产出结论 → 收敛率 0%，
+    #    而报告却建议"提高 --max-steps"（那个参数根本改不动它）。
+    p.add_argument("--cross-exam-steps", type=int, default=14,
+                   help="多 Agent 专用：交叉质证轮的 LLM 轮次上限。"
+                        "⚠️ 14 是尚未实测校准的临时值（原为写死 4，不够用），"
+                        "真实需求由 D12 按实测步数分布定稿")
     p.add_argument("--mode", choices=["live", "record", "replay"], default="live")
     p.add_argument("--agent", choices=["baseline", "multi"], default="baseline",
                    help="baseline = 单 Agent；multi = 三个专职 Agent + 交叉质证 + 裁决")
@@ -472,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         rounds=args.rounds,
         model=args.model,
         max_steps=args.max_steps,
+        cross_exam_steps=args.cross_exam_steps,
         mode=args.mode,
         agent=args.agent,
     )
