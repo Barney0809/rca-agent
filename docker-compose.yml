@@ -44,6 +44,11 @@ services:
       # 模拟外部风控：0ms 表示正常。D2 会把它调大来复现"下游超时"
       W_PAYMENT_RISK_LATENCY_MS: "30"
       W_PAYMENT_RISK_ERROR_RATE: "0"
+      # 时区：容器默认是 UTC，会比本机早 8 小时。
+      # D2 起要把"变更发生的时刻"和"日志里的时刻"对上，时区必须统一，
+      # 否则根因分析会因为时间轴错位而失效。
+      # 镜像里已带 /usr/share/zoneinfo/Asia/Shanghai，无需额外安装。
+      TZ: "Asia/Shanghai"
     ports:
       - "8082:8000"
     depends_on:
@@ -76,6 +81,7 @@ services:
       W_INVENTORY_DOWNSTREAM_RETRIES: "1"
       W_INVENTORY_DOWNSTREAM_TIMEOUT_MS: "3000"
       W_INVENTORY_DOWNSTREAM_RETRY_BACKOFF_MS: "100"
+      TZ: "Asia/Shanghai"
     ports:
       - "8081:8000"
     depends_on:
@@ -108,6 +114,7 @@ services:
       W_ORDER_DOWNSTREAM_RETRIES: "1"
       W_ORDER_DOWNSTREAM_TIMEOUT_MS: "3000"
       W_ORDER_DOWNSTREAM_RETRY_BACKOFF_MS: "100"
+      TZ: "Asia/Shanghai"
     ports:
       - "8080:8000"
     depends_on:
