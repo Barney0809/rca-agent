@@ -102,12 +102,108 @@ def _read_log_text(run_dir: Path | None, service: str) -> str:
 
 
 # ---------------------------------------------------------------- 指标
+#
+# ⚠️⚠️ 指标必须被**场景窗口限定**，不能直接读 live /metrics ⚠️⚠️
+#
+# Prometheus 的计数器是**自进程启动以来**的累计值。容器不重启，
+# 直接读 live 拿到的是**前面所有场景的叠加**。
+#
+# 2026-09-24 踩过的坑（docs/harness-log.md #12）：
+#   F6 场景（只注入内存泄漏）的 Agent 从指标里读到 F5/F4/F2 残留的
+#   "3931 次风控错误、2495 次池耗尽"，得出了完全错误的结论，
+#   **D5 的全部结论因此作废**。而这一切没有任何报错。
+#
+# 所以现在的规则是：
+#   有 before/after 快照 → 计数器取差值、仪表取结束值（**窗口视图**）
+#   没有快照            → 仍然返回 live 值，但**明确标注不可信**
+_COUNTER_SUFFIXES = ("_total", "_sum", "_count")
+
+
+def _is_counter(series_name: str) -> bool:
+    """判断是否为计数器（可累加）还是仪表（瞬时值）。
+
+    Prometheus 的命名约定：计数器以 `_total` / `_sum` / `_count` 结尾。
+    对应 Java：Micrometer 的 Counter 与 Gauge。
+    """
+    return series_name.split("{")[0].endswith(_COUNTER_SUFFIXES)
+
+
+def _load_snapshot(run_dir: Path | None, tag: str) -> dict[str, str] | None:
+    if run_dir is None:
+        return None
+    path = run_dir / f"metrics-{tag}.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _window_view(
+    before: dict[str, str], after: dict[str, str], services: tuple[str, ...]
+) -> dict[str, dict[str, float]]:
+    """由两份快照算出窗口视图。
+
+        计数器 → after - before（本窗口内增加了多少）
+        仪表   → after 的值（结束时的瞬时状态）
+
+    ⚠️ 计数器若出现负差（说明进程中途重启过），钳到 0 并在 meta 里标记，
+       而不是把一个负数当成"发生了负次数的事件"。
+    """
+    out: dict[str, dict[str, float]] = {}
+    restarted: list[str] = []
+
+    for svc in services:
+        b = parse_prometheus(before.get(svc, ""))
+        a = parse_prometheus(after.get(svc, ""))
+        view: dict[str, float] = {}
+        for name, after_val in a.items():
+            if _is_counter(name):
+                delta = after_val - b.get(name, 0.0)
+                if delta < 0:
+                    restarted.append(f"{svc}:{name}")
+                    delta = 0.0
+                view[name] = delta
+            else:
+                view[name] = after_val
+        out[svc] = view
+
+    out["__meta__"] = {
+        "windowed": 1.0,
+        "restarted_series": float(len(restarted)),
+    }
+    return out
+
 
 def collect_metrics(
+    run_dir: Path | None = None,
     services: tuple[str, ...] = DEFAULT_SERVICES,
     timeout_s: float = 10.0,
 ) -> dict[str, dict[str, float]]:
-    """采集三个服务的 /metrics，返回 {服务名: {序列名: 值}}。"""
+    """采集三个服务的指标。
+
+    **优先使用场景快照并返回窗口增量**；没有快照时回退到 live 累计值，
+    但会打印醒目告警并在返回里标记 `__meta__.windowed = 0`。
+
+    这个 signature 里的 `run_dir` 不是可选的装饰 —— 少了它就等于回到
+    "读脏数据"的老路上（见 harness-log #12）。
+    """
+    before = _load_snapshot(run_dir, "before")
+    after = _load_snapshot(run_dir, "after")
+
+    if before is not None and after is not None:
+        return _window_view(before, after, services)
+
+    # ---- 回退：live 累计值 ----
+    print(
+        "  ⚠️ 警告：找不到指标快照"
+        f"（{run_dir}/metrics-before.json / metrics-after.json 缺失）。\n"
+        "     将回退到 live /metrics —— 但那是**自容器启动以来的累计值**，\n"
+        "     可能包含其他场景的残留，会让结论建立在错误的证据上。\n"
+        "     重新跑一次场景即可生成快照：\n"
+        "       python scripts/inject_fault.py scenario <F1..F6>"
+    )
     out: dict[str, dict[str, float]] = {}
     with httpx.Client(timeout=timeout_s) as client:
         for svc in services:
@@ -118,10 +214,9 @@ def collect_metrics(
                 resp = client.get(f"{base}/metrics")
                 resp.raise_for_status()
                 out[svc] = parse_prometheus(resp.text)
-            except Exception as exc:  # noqa: BLE001
-                out[svc] = {"__error__": 0.0}
-                out[svc]["__error_message__"] = 0.0
-                _ = exc
+            except Exception:  # noqa: BLE001
+                out[svc] = {}
+    out["__meta__"] = {"windowed": 0.0, "restarted_series": 0.0}
     return out
 
 

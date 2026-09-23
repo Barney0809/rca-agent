@@ -76,9 +76,29 @@ class RunContext:
         return cls(
             run_id=run_dir.name,
             log_view=view,
-            metrics=collect_metrics(services),
+            # ⚠️ 必须把 run_dir 传进去：指标要读场景快照算窗口增量，
+            #    不能直接读 live /metrics（那是累计值）。见 harness-log #12。
+            metrics=collect_metrics(run_dir, services),
             changes=collect_changes(run_dir),
             scenario=load_scenario(run_dir),
+        )
+
+    def fork(self) -> RunContext:
+        """给一个专职 Agent 用的**独立计数器**，但共享同一份底层数据。
+
+        为什么需要：三个专职 Agent 会并发跑（它们是独立的观察者，
+        不该互相等待）。但 `tool_calls` / `tool_log` 是可变状态 ——
+        共享的话三个 Agent 的统计会互相污染，步数就没法归因到具体角色了。
+
+        ⚠️ 底层数据（日志视图 / 指标 / 变更 / 场景）是共享的**只读**引用 ——
+           不要在这些对象上做原地修改，否则会串。
+        """
+        return RunContext(
+            run_id=self.run_id,
+            log_view=self.log_view,
+            metrics=self.metrics,
+            changes=self.changes,
+            scenario=self.scenario,
         )
 
 
@@ -169,7 +189,7 @@ _INTERESTING_METRICS = (
     "pool_limit",
     "risk_control_duration_ms",
     "stock_level",
-    "leak_bytes",
+    "leak_bytes_total",
 )
 
 
@@ -179,9 +199,30 @@ def query_metrics(
     service: str | None = None,
     keyword: str | None = None,
 ) -> str:
-    """查指标。只返回白名单内、且有诊断价值的序列。"""
+    """查指标。只返回白名单内、且有诊断价值的序列。
+
+    ⚠️ 返回的是**本场景窗口内**的值：
+       计数器 = 窗口增量（不是累计值）
+       仪表   = 窗口结束时的瞬时值
+       若快照缺失，会在开头明确警告 —— 而不是静默给出可能被污染的累计值。
+    """
     lines: list[str] = []
+
+    meta = ctx.metrics.get("__meta__", {})
+    if meta and not meta.get("windowed", 0.0):
+        lines.append(
+            "⚠️ 注意：本次指标**不是按场景窗口统计的**，"
+            "而是容器自启动以来的累计值，可能包含其他时段的残留。"
+            "请谨慎使用，并优先依赖日志与变更记录。"
+        )
+    elif meta:
+        lines.append(
+            "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+        )
+
     for svc, series in sorted(ctx.metrics.items()):
+        if svc.startswith("__"):            # 跳过 __meta__ 这类内部项
+            continue
         if service and svc != service:
             continue
         picked = []
@@ -295,6 +336,12 @@ class ToolBox:
         ⚠️ 参数来自模型，**可能是坏 JSON** —— 必须兜住并返回可读的错误，
            让模型自己纠正。直接把异常抛出去会让整轮失败。
         """
+        # ---- 先过权限检查（子类可覆盖）----
+        denial = self._check_allowed(name)
+        if denial is not None:
+            self._record(name, arguments_json, ok=False)
+            return denial
+
         try:
             args = json.loads(arguments_json) if arguments_json.strip() else {}
             if not isinstance(args, dict):
@@ -328,6 +375,57 @@ class ToolBox:
         self._record(name, arguments_json, ok=True)
         return out
 
+    def _check_allowed(self, name: str) -> str | None:
+        """权限检查。基类不限制，子类覆盖。返回 None 表示放行。"""
+        return None
+
     def _record(self, name: str, arguments_json: str, *, ok: bool) -> None:
         self.ctx.tool_calls += 1
         self.ctx.tool_log.append({"tool": name, "args": arguments_json, "ok": ok})
+
+
+class RestrictedToolBox(ToolBox):
+    """**只允许调用指定工具**的工具箱 —— 需求 FR-1.3「信息隔离」的实现。
+
+    ============================ 为什么要在代码里强制 ============================
+
+    只在 prompt 里写"你只能用 query_metrics"是不够的 ——
+    模型可能仍然尝试调别的工具（提示词不是约束，是建议）。
+
+    而这里的设计意图是：**每个 Agent 必须存在自己看不到的东西**。
+    因为"存在盲区"才逼得出真正的协作；如果每个 Agent 都能看到全部，
+    那多 Agent 只是"同一份数据问三遍"，毫无意义。
+
+    所以越权调用会被**明确拒绝**，并告诉它应该怎么做。
+
+    ============================ 它怎么打中 D5 的靶子 2 ============================
+
+    D5 里 F6（内存泄漏）只有 33% —— Agent 被大量 ERROR 日志"喊"走了，
+    漏掉了 `leak_bytes` 这个安静指标。
+
+    MetricsAgent **只能调 query_metrics**：它没有别的地方可看。
+    **隔离不是限制，是强制它看该看的东西。**
+    """
+
+    def __init__(self, ctx: RunContext, allowed: frozenset[str], *, role: str = "") -> None:
+        super().__init__(ctx)
+        self.allowed = allowed
+        self.role = role
+        self.denials: list[str] = []
+
+    def specs(self) -> list[dict]:
+        """只暴露被允许的工具 —— 模型根本看不到别的工具。"""
+        return [s for s in TOOL_SPECS if s["function"]["name"] in self.allowed]
+
+    def _check_allowed(self, name: str) -> str | None:
+        if name in self.allowed:
+            return None
+        self.denials.append(name)
+        allowed = "、".join(sorted(self.allowed)) or "（无）"
+        return (
+            f"拒绝：工具「{name}」不在你的职责范围内。\n"
+            f"你只能使用：{allowed}\n"
+            f"请基于你能看到的数据给出结论；看不到的部分由其他同事负责。"
+            f"如果你判断必须看别的数据，请在结论里明确指出「需要哪一项证据」，"
+            f"而不要试图绕过职责边界。"
+        )

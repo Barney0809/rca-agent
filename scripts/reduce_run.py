@@ -123,7 +123,7 @@ def main() -> int:
     view = reduce_logs(records)
     view.unparsed_lines = unparsed
 
-    metrics = collect_metrics()
+    metrics = collect_metrics(run_dir)
     changes = collect_changes(run_dir)
 
     if not records:

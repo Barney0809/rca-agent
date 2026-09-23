@@ -53,7 +53,7 @@ metrics.describe("downstream_calls_total", "调用下游的次数")
 metrics.describe("pool_in_flight", "当前占用中的连接数")
 metrics.describe("pool_limit", "连接池当前容量")
 metrics.describe("handler_duration_ms", "本服务处理一次请求的耗时（毫秒）")
-metrics.describe("leak_bytes", "F6 注入时累积的泄漏字节数")
+metrics.describe("leak_bytes_total", "累计泄漏字节数（**计数器**，只增不减）")
 
 
 @asynccontextmanager
@@ -132,9 +132,20 @@ async def create_order(body: OrderRequest, request: Request):
     try:
         # ---- F6（内存泄漏，对照组）的注入点 ----
         # 只有 knobs.leak_mb_per_req > 0 时才泄漏；默认 0，对正常路径零影响。
+        #
+        # ⚠️ 用 inc()（计数器）而不是 set_gauge()。
+        #    踩过的坑：第一版把它做成 gauge 且写入"当前总和"。
+        #    gauge 在场景之间**从不重置** —— 于是跑过一次 F6 之后，
+        #    后续每个场景的指标里都留着一个几 GB 的泄漏值，
+        #    所有 Agent 都会误以为"这个场景有内存泄漏"。
+        #    这与 harness-log #12 是同一类问题：**静默的脏数据源**。
+        #
+        #    修正后它符合 Prometheus 命名约定（`_total` 结尾 = 计数器），
+        #    于是采集层会自动对计数器取窗口差值，污染问题消失。
         if knobs.leak_mb_per_req > 0:
-            _LEAK[order_id] = b"x" * int(knobs.leak_mb_per_req * 1024 * 1024)
-            metrics.set_gauge("leak_bytes", sum(len(v) for v in _LEAK.values()))
+            chunk = b"x" * int(knobs.leak_mb_per_req * 1024 * 1024)
+            _LEAK[order_id] = chunk
+            metrics.inc("leak_bytes_total", len(chunk))
 
         # ⚠️⚠️ 刻意的反模式 ⚠️⚠️
         #

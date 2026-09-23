@@ -201,6 +201,37 @@ def count_log_lines() -> int | None:
         return None
 
 
+def snapshot_metrics(run_dir: Path, tag: str) -> int:
+    """抓一份三个服务的指标快照到 runs/<id>/metrics-<tag>.json。
+
+    ============================ 为什么必须有两份快照 ============================
+
+    Prometheus 的**计数器是自进程启动以来的累计值**。
+    容器从 D1 起就没重启过 —— 所以直接 GET live `/metrics` 拿到的
+    是**前面所有场景的叠加**。
+
+    2026-09-24 踩过这个坑：F6 场景（只注入内存泄漏）的 Agent 从指标里读到
+    了 F5/F4/F2 残留的 "3931 次风控错误、2495 次池耗尽"，
+    于是得出了完全错误的结论，**D5 的全部结论因此作废**。
+    见 docs/harness-log.md #12。
+
+    有了 before/after 两份快照，采集层才能算出**本场景窗口内**的增量：
+        计数器 → 差值（after - before）
+        仪表   → 结束时的瞬时值
+    """
+    data: dict[str, str] = {}
+    with httpx.Client(timeout=15.0) as client:
+        for svc, base in SERVICES.items():
+            try:
+                data[svc] = client.get(f"{base}/metrics").text
+            except Exception as exc:  # noqa: BLE001
+                data[svc] = f"# __snapshot_error__ {type(exc).__name__}: {exc}"
+    (run_dir / f"metrics-{tag}.json").write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8"
+    )
+    return sum(len(v.splitlines()) for v in data.values())
+
+
 def capture_logs(run_dir: Path, since_iso: str) -> dict[str, int]:
     """把本场景窗口内的日志逐服务抓进 runs/<id>/logs/<svc>.log。
 
@@ -364,7 +395,9 @@ async def _run_scenario(
         print("\n[1/6] 读取基线")
         logs_before = count_log_lines()
         knobs_before = read_knobs(client)
-        print(f"      日志累计行数 {logs_before}")
+        # ★ 指标快照 before：没有它就无法区分"本场景发生的事"与"历史累计"
+        snapshot_metrics(run_dir, "before")
+        print(f"      日志累计行数 {logs_before}  已抓指标快照 before")
 
         # ---------- 2. 施加故障 ----------
         print("\n[2/6] 施加故障")
@@ -422,14 +455,18 @@ async def _run_scenario(
               f"错误 {load['error']}  RPS {load['rps']}  平均延迟 {load['avg_latency_ms']}ms")
 
         # ---------- 5. 撤销并收尾 ----------
-        print("\n[5/6] 撤销故障并抓取日志")
+        print("\n[5/6] 撤销故障并抓取快照")
+        # ★ 指标快照 after 必须在**撤销之前**抓：
+        #   撤销只改 Knobs（无日志、无指标变化），但把顺序写死能避免将来出错
+        snapshot_metrics(run_dir, "after")
         if fault:
             revert_patches(client, fault)
             print("      已恢复默认")
         time.sleep(2)   # 等最后几行日志落盘
         logs_after = count_log_lines()
         log_counts = capture_logs(run_dir, started_at)
-        print("      已抓取日志：" + "  ".join(f"{k}={v}行" for k, v in log_counts.items()))
+        print("      已抓指标快照 after；已抓日志："
+              + "  ".join(f"{k}={v}行" for k, v in log_counts.items()))
         knobs_after = read_knobs(client)
 
     delta = None
