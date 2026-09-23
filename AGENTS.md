@@ -104,11 +104,41 @@
 | 旧名 | `deepseek-chat` / `deepseek-reasoner` **已于 2026-07-24 停服，不是别名** |
 | BASE URL | `https://api.deepseek.com`（OpenAI 兼容） |
 
-### ⚡ 三个已知坑
+### ⚡ 已实测的坑（D0 spike 结论，2026-09-24，非二手资料）
 
-1. **`thinking` 默认是开启的** —— 不显式关闭会持续产生推理 token 费用，成本曲线失真
-2. **带 `tools` 的多轮对话必须回传 `reasoning_content`，否则 400** —— 对多 Agent 反复调工具的场景极其致命
-3. **缓存字段**是 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`
+**坑 1：`thinking` 默认开启，而且真的在计费。**
+
+实测：让模型回答"收到"两个字，`usage.completion_tokens_details.reasoning_tokens = 13`。
+在带工具的两轮对话里，推理 token 占输出 token 的 **15%–26%**。
+
+关闭方式**只有一种有效**：
+
+```python
+extra_body={"thinking": {"type": "disabled"}}
+```
+
+| 候选写法 | 实测结果 |
+|---|---|
+| `thinking={"type":"disabled"}` | ✅ 有效，`reasoning_content` 消失 |
+| `enable_thinking=False` | ⚠️ **请求成功但被静默忽略**——以为关了，其实一直在付钱 |
+| `thinking=False` | ❌ 422 |
+
+> `enable_thinking=False` 是最危险的一个：**不报错、不告警**，成本对账时会莫名其妙对不上。
+
+**坑 2：「多轮 tools 必须回传 `reasoning_content` 否则 400」—— 实测未复现，判为不成立。**
+
+四种组合（第2轮 thinking 开关 × 是否回传）在 `deepseek-flash` + OpenAI 兼容接口 + 两轮工具调用下**全部成功**。
+
+**仍建议保留该字段，但理由变了**：不是为了通过接口校验，而是**成本核算与调试需要看到推理内容**。
+
+> 未覆盖：`deepseek-v4-pro`、3 轮以上、Anthropic 兼容端点（`/anthropic`）。若在这些场景遇到 400，优先怀疑这条。
+
+**坑 3：缓存字段有两套，都要认。**
+
+- DeepSeek：`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`
+- OpenAI 标准：`prompt_tokens_details.cached_tokens`
+
+缓存是**自动**的、无需显式开启；实测在第 2 轮就出现命中（`cache_hit=128`）。
 
 ### 版本与 API
 
