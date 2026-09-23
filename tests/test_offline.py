@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import httpx
@@ -161,7 +162,15 @@ def _executable_scripts() -> list[Path]:
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
-        if SKIP_DIRS & set(path.parts):
+        # ⚠️ 必须比对**相对于项目根**的路径，而不是绝对路径的每一段。
+        #
+        # 用绝对路径比对会误伤：只要项目恰好被放在名为 runs / target / recordings
+        # 之类的目录下面，`SKIP_DIRS & set(path.parts)` 就恒为真，
+        # 整个扫描会**静默跳过全部文件**、扫到 0 个脚本 —— 然后这条用例仍然"通过"。
+        #
+        # 这不是假想：变异检查脚本把代码副本放在 `runs/_mutants/` 下时，
+        # 副本里就正好扫到 0 个脚本（被 test_regression_3_the_check_actually_scans_something 抓到）。
+        if SKIP_DIRS & set(path.relative_to(ROOT).parts):
             continue
         if path.suffix.lower() in ASCII_SUFFIXES or path.name in ASCII_EXACT_NAMES:
             found.append(path)
@@ -211,6 +220,133 @@ def test_regression_3_the_check_actually_scans_something():
     # 门槛写 2 而不是 3：写死过高的数字会让"新增脚本还没加"变成假红。
     assert len(scripts) >= 2, f"只扫到 {len(scripts)} 个脚本：{names}"
     assert any(p.name == "Makefile" for p in scripts), "没扫到 Makefile，路径规则可能错了"
+
+
+# ================================================================
+# P4：会 print 的脚本必须给 stdout 兜底（同一个编码机制的第四次复现）
+# ================================================================
+#
+# 事实：本机控制台代码页是 GBK（936）。stdout **接到管道/文件**时，
+#   Python 会退回本地编码 GBK，打印它编不出的字符（emoji 之类）就抛
+#   `UnicodeEncodeError: 'gbk' codec can't encode character '\u2705'`。
+#
+# 后果特别恶劣的地方在于：**它是在最后一步炸的** ——
+#   脚本可能已经跑完了全部工作（包括真实调用了 LLM、花了钱），
+#   只因为打印一个 ✅ 就崩掉，整段输出和退出码一起丢掉，看起来像"脚本坏了"。
+#
+# ============================ 正确写法是实测出来的 ============================
+#
+#   这个仓库里曾经有两种"看起来都像兜底"的写法。用 `scripts/probe_stdout_encoding.py`
+#   在**真实管道**下实测（本机 cp936），结果如下：
+#
+#     | 写法                                | 中文      | emoji | 结论 |
+#     |-------------------------------------|-----------|-------|------|
+#     | 完全不兜底                          | GBK 字节  | 崩溃  | ❌   |
+#     | `reconfigure(errors="replace")`     | 仍是 GBK  | `?`   | ❌ 不崩，但读不成 |
+#     | `reconfigure(encoding="utf-8", ...)`| 正常      | 正常  | ✅   |
+#
+#   所以用例必须**同时**钉住 encoding 和 errors。
+#   只查"有没有调用 reconfigure"是不够的 —— 作者本人第一版就是这么写的，
+#   还配了一段"不要用 encoding=utf-8，那会让中文变乱码"的注释，
+#   然后被上面这张表直接推翻。
+#
+# 为什么不做"print 里一律不许非 ASCII"的一刀切禁令：
+#   仓库里已有 170+ 处中文 print。它们是**能正常显示**的（中文在 GBK 里有编码），
+#   禁令会把"能工作"的东西判成违规，属于为了洁癖制造假红。
+
+
+# 哪些 errors= 策略算"真的把崩溃降级了"。
+# strict 不在其中 —— 它是 Python 的默认值，写了等于没写。
+FORGIVING_ERROR_MODES = frozenset(
+    {"replace", "backslashreplace", "ignore", "xmlcharrefreplace"}
+)
+
+
+def _script_printers() -> list[tuple[Path, ast.Module]]:
+    """所有"会 print"的 python 脚本（连同它的语法树，避免重复解析）。"""
+    out: list[tuple[Path, ast.Module]] = []
+    for path in sorted((ROOT / "scripts").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+            for node in ast.walk(tree)
+        ):
+            out.append((path, tree))
+    return out
+
+
+def _has_stdout_guard(tree: ast.Module) -> bool:
+    """是否调用了 `sys.stdout.reconfigure(encoding="utf-8", errors=<宽容策略>)`。
+
+    ⚠️ 这里**不能**只检查"有没有调用 reconfigure"，也不能只检查 errors=。
+
+    因为：
+      · `sys.stdout.reconfigure(errors="strict")` 与**根本不调用它完全等价**
+        （strict 就是默认值），但它在源码里长得和真守卫一模一样；
+      · `sys.stdout.reconfigure(errors="replace")` 虽然不崩了，
+        但输出仍是 GBK 字节，被按 UTF-8 读的地方全是乱码 —— 实测表里的第二行。
+
+    只查形状的断言会把这两种写法判成合格，那就成了一条**装饰性用例**：
+    看着在守护，实际什么都守护不了。
+
+    所以必须一路查到 `encoding=` 与 `errors=` 的**取值**上。
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "reconfigure":
+            continue
+        # 必须是 sys.stdout.reconfigure(...)，不是 sys.stderr 之类
+        if not (isinstance(func.value, ast.Attribute) and func.value.attr == "stdout"):
+            continue
+
+        # reconfigure 的 encoding / errors 都是 keyword-only，所以只查 keywords
+        kwargs = {
+            kw.arg: kw.value.value
+            for kw in node.keywords
+            if kw.arg and isinstance(kw.value, ast.Constant)
+        }
+        if kwargs.get("encoding") == "utf-8" and kwargs.get("errors") in FORGIVING_ERROR_MODES:
+            return True
+    return False
+
+
+def test_regression_p4_printing_scripts_guard_against_gbk_console():
+    """P4 —— 会 print 的脚本必须给 stdout 兜底。
+
+    真实触发（四次同一机制，见 harness-log #1 #2 #3 与 P4）：
+    变异检查脚本 `scripts/mutate_check.py` 第一次运行，
+    在**打印结果的那一行**抛 `UnicodeEncodeError: '\u2713'`，
+    结果是一条结论都没输出就崩了 —— 而它明明已经跑完了全部检查。
+    """
+    offenders = [
+        str(path.relative_to(ROOT)) for path, tree in _script_printers() if not _has_stdout_guard(tree)
+    ]
+
+    assert not offenders, (
+        "以下脚本会 print，却没有给 stdout 兜底，在有非 ASCII 字符时会直接崩溃：\n  "
+        + "\n  ".join(offenders)
+        + "\n请在 import sys 之后加上（encoding 与 errors 缺一不可，见上面的实测表）：\n"
+        + "    try:\n"
+        + '        sys.stdout.reconfigure(encoding="utf-8", errors="replace")\n'
+        + "    except Exception:\n"
+        + "        pass\n"
+        + "详见 docs/harness-log.md P4。"
+    )
+
+
+def test_regression_p4_the_scan_actually_found_printing_scripts():
+    """元测试：确认上面的扫描不是"扫了 0 个脚本"造成的假绿。"""
+    printers = _script_printers()
+    names = sorted(str(p.relative_to(ROOT)) for p, _ in printers)
+
+    assert len(printers) >= 5, f"只扫到 {len(printers)} 个会 print 的脚本：{names}"
+    assert any(p.name == "mutate_check.py" for p, _ in printers), (
+        "没扫到 mutate_check.py —— 要么它被改名了，要么 scripts/ 路径规则错了"
+    )
 
 
 # ================================================================

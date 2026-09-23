@@ -16,11 +16,14 @@ D6 验收：三个专职 Agent 的职责边界与信息隔离。
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
 
+from rca.agents.coordinator import build_cross_exam_message
 from rca.agents.roles import ALL_ROLES, CHANGE_AGENT, LOGS_AGENT, METRICS_AGENT
+from rca.agents.specialist import Hypothesis
 from rca.telemetry.models import ReducedView
 from rca.tools import RestrictedToolBox, RunContext, ToolBox
 
@@ -163,7 +166,7 @@ def test_fork_gives_independent_counters(empty_ctx: RunContext):
 
 
 def test_baseline_module_is_frozen():
-    """⚠️ 元测试：`baseline.py` 不允许被改动。
+    """元测试：`baseline.py` 不允许被改动。
 
     D5 的数字（准确率 61.1%）已经写进文档，是对照实验的分母。
     如果有人为了"统一代码风格"把 baseline 重构成通用类，
@@ -185,3 +188,133 @@ def test_baseline_module_is_frozen():
         f"baseline 是对照实验的分母，改动它会让 docs/05 的数字失效。\n"
         f"若确实需要改，请：① 更新本用例里的指纹；② 重新跑一遍 baseline 并更新 docs/05。"
     )
+
+
+# ================================================================
+# 第二轮：交叉质证的 prompt 渲染
+# ================================================================
+#
+# 真实缺陷：`CROSS_EXAM_PROMPT` 里含有 JSON 输出模板，
+#   `str.format` 会把模板里的 `{` `}` 当成占位符，
+#   直接抛 `KeyError: '\n  "revised_claim"'`。
+#
+# 为什么这条缺陷值得单独立一组用例：
+#   它是**只有真跑起来才会暴露**的错误（渲染发生在发请求之前，但没人单向测过渲染）。
+#   修好之后，如果只用"人工记得不要用 format"来保证，那它就是一条**靠自觉**的约束——
+#   正是本项目要消灭的东西。
+#
+# 所以这里做两件事：
+#   1. 让渲染变成可被直接调用的纯函数，用例**走真实代码路径**（行为面）；
+#   2. 用 AST 钉住"生产代码确实在调用那个函数"（结构面）。
+#      否则有人把渲染内联回 cross_examine，行为用例仍全绿，而生产路径已悄悄分叉。
+
+
+def _mk_hypothesis(role: str, name: str, claim: str, evidence: list[str]) -> Hypothesis:
+    return Hypothesis(role=role, name=name, claim=claim, evidence=evidence)
+
+
+def test_cross_exam_message_renders_colleagues_and_keeps_json_contract() -> None:
+    """渲染必须既塞进同事结论，又原样保住 JSON 输出模板。"""
+    own = _mk_hypothesis("logs", "LogsAgent", "我看到下游超时", ["order 报 502"])
+    others = [
+        _mk_hypothesis("metrics", "MetricsAgent", "连接池被占满", ["pool_in_use=64"]),
+        _mk_hypothesis("change", "ChangeAgent", "有人改了池大小", ["pool 64->2"]),
+    ]
+
+    msg = build_cross_exam_message(own, others)
+
+    # 三个人的结论都必须在场（含自己的）
+    assert "我看到下游超时" in msg
+    assert "连接池被占满" in msg
+    assert "有人改了池大小" in msg
+
+    # 占位符必须被吃掉
+    assert "{colleagues}" not in msg
+
+    # JSON 输出模板必须**一个字符都没被动过** —— 这是原来炸掉的地方
+    for key in ("revised_claim", "evidence_against", "why_changed", "falsifies"):
+        assert f'"{key}"' in msg, f"JSON 契约字段 {key} 丢了"
+
+
+def test_cross_exam_message_survives_braces_in_colleague_claims() -> None:
+    """同事结论里自带 `{}` 时也不能炸。
+
+    这不是假想：LLM 很爱在结论里直接贴 JSON 片段。
+    只要渲染走的是 replace（而不是 format），插入的文本就是纯字面量，天然免疫。
+    """
+    own = _mk_hypothesis("logs", "LogsAgent", "我贴一段原始 JSON：{\"code\": 502}", [])
+    others = [
+        _mk_hypothesis(
+            "metrics",
+            "MetricsAgent",
+            '指标快照 {"pool_in_use": 64, "pool_limit": 2} 说明池被打满',
+            ["leak_bytes_total=1"],
+        )
+    ]
+
+    msg = build_cross_exam_message(own, others)   # 不许抛异常
+
+    assert '{"code": 502}' in msg
+    assert '{"pool_in_use": 64, "pool_limit": 2}' in msg
+
+
+def test_cross_exam_prompt_is_never_rendered_with_str_format() -> None:
+    """结构面：模块里不许对 CROSS_EXAM_PROMPT 调用 `.format(...)`。
+
+    只钉这一个对象，不做全模块的 `.format` 禁令，避免误伤无关代码。
+    """
+    tree = _coordinator_ast()
+
+    offenders = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "format"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "CROSS_EXAM_PROMPT"
+    ]
+
+    assert not offenders, (
+        f"coordinator.py 第 {offenders} 行对 CROSS_EXAM_PROMPT 调用了 .format(...)。\n"
+        f"prompt 里含 JSON 输出模板，其中的 {{ }} 会被当成占位符并抛 KeyError。\n"
+        f"请改用 build_cross_exam_message()（内部是 str.replace）。"
+    )
+
+
+def test_cross_examine_actually_calls_the_tested_renderer() -> None:
+    """结构面：`cross_examine` 必须调用 `build_cross_exam_message`。
+
+    否则上面两条行为用例测的是"一个没人用的函数"，
+    而真正发出去的 prompt 已经绕过了它 —— 测试照样全绿，缺陷照样存在。
+    """
+    tree = _coordinator_ast()
+
+    target = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "cross_examine"
+        ),
+        None,
+    )
+    assert target is not None, "coordinator.py 里找不到 cross_examine"
+
+    called = {
+        node.func.id
+        for node in ast.walk(target)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "build_cross_exam_message" in called, (
+        "cross_examine 没有调用 build_cross_exam_message()。\n"
+        "渲染逻辑一旦被内联回去，针对渲染的回归用例就再也覆盖不到生产路径了。"
+    )
+
+
+def _coordinator_ast() -> ast.Module:
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "rca" / "agents" / "coordinator.py"
+    ).read_text(encoding="utf-8")
+    return ast.parse(src)

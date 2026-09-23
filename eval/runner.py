@@ -44,7 +44,6 @@ from rca.llm.recording import Recorder  # noqa: E402
 from rca.tools import RunContext  # noqa: E402
 
 from eval.scenarios import SCENARIOS, ScenarioScore  # noqa: E402
-
 RUNS_DIR = ROOT / "runs"
 
 
@@ -102,6 +101,9 @@ class Attempt:
     elapsed_s: float
     finished: bool
     parse_ok: bool
+    # 多 Agent 模式下的额外信息（交叉质证的改变次数、驳回项、分歧等）。
+    # 默认为空 dict —— 这样既有的 results.json 仍能被 load_report 读回。
+    detail: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
@@ -113,6 +115,7 @@ class Report:
     mode: str
     rounds: int
     started_at: str
+    agent: str = "baseline"
     attempts: list[Attempt] = field(default_factory=list)
 
     # ---- 聚合 ----
@@ -188,6 +191,7 @@ class Report:
 
     def to_dict(self) -> dict:
         return {
+            "agent": self.agent,
             "model": self.model,
             "mode": self.mode,
             "rounds": self.rounds,
@@ -206,8 +210,9 @@ def run(
     fault_ids: list[str] | None = None,
     rounds: int = 3,
     model: str | None = None,
-    max_steps: int = 8,
+    max_steps: int = 14,
     mode: str = "live",
+    agent: str = "baseline",
     verbose: bool = True,
 ) -> Report:
     cfg = LlmConfig.from_env()
@@ -217,8 +222,6 @@ def run(
         recorder = Recorder(rec_path, mode="record" if mode == "record" else "replay")
 
     client = DeepSeekClient(cfg, recorder=recorder)
-    agent = BaselineAgent(client, model=model, max_steps=max_steps)
-
     runs = discover_runs(fault_ids)
     report = Report(
         model=model or cfg.model_cheap,
@@ -226,6 +229,7 @@ def run(
         rounds=rounds,
         started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
     )
+    report.agent = agent
 
     if not runs:
         print("没有找到可用场景。先跑：python scripts/inject_fault.py scenario F1")
@@ -233,10 +237,12 @@ def run(
 
     if verbose:
         print("=" * 96)
-        print(f"  baseline 评测   模型={report.model}  模式={mode}  轮数={rounds}  "
-              f"场景数={len(runs)}")
+        print(f"  {agent} 评测   模型={report.model}  模式={mode}  轮数={rounds}  "
+              f"场景数={len(runs)}  最大步数={max_steps}")
         print("=" * 96)
         print()
+
+    baseline_agent = BaselineAgent(client, model=model, max_steps=max_steps)
 
     for fid, run_dir in runs.items():
         score = SCENARIOS.get(fid)
@@ -249,35 +255,102 @@ def run(
             if verbose:
                 print(f"  [{fid} 第{rnd}轮] ", end="", flush=True)
             ctx = RunContext.from_run_dir(run_dir)
-            diag = agent.diagnose(ctx)
-            correct, _ = score.judge(diag.root_cause)
-            attempt = Attempt(
-                fault_id=fid,
-                round_no=rnd,
-                correct=correct,
-                explanation=score.explain(diag.root_cause),
-                root_cause=diag.root_cause[:400],
-                steps=diag.steps,
-                tool_calls=diag.tool_calls,
-                cost_yuan=diag.cost_yuan,
-                input_tokens=diag.input_tokens,
-                output_tokens=diag.output_tokens,
-                elapsed_s=diag.elapsed_s,
-                finished=diag.finished,
-                parse_ok=diag.parse_ok,
-            )
+
+            if agent == "multi":
+                attempt = _run_multi_slice(client, ctx, fid, rnd, score, model, max_steps)
+            else:
+                attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score)
+
             report.attempts.append(attempt)
             if verbose:
                 print(
-                    f"{'✅' if correct else '❌'} 步数={diag.steps} "
-                    f"工具={diag.tool_calls} 成本=¥{diag.cost_yuan:.4f} "
-                    f"{diag.elapsed_s:.1f}s"
+                    f"{'✅' if attempt.correct else '❌'} 步数={attempt.steps} "
+                    f"工具={attempt.tool_calls} 成本=¥{attempt.cost_yuan:.4f} "
+                    f"{attempt.elapsed_s:.1f}s"
                 )
-                if not correct:
+                if not attempt.correct:
                     print(f"        结论：{attempt.root_cause[:150]}")
                     print(f"        {attempt.explanation}")
 
     return report
+
+
+def _run_baseline_slice(
+    baseline_agent: BaselineAgent,
+    ctx: RunContext,
+    fid: str,
+    rnd: int,
+    score: ScenarioScore,
+) -> Attempt:
+    diag = baseline_agent.diagnose(ctx)
+    correct, _ = score.judge(diag.root_cause)
+    return Attempt(
+        fault_id=fid,
+        round_no=rnd,
+        correct=correct,
+        explanation=score.explain(diag.root_cause),
+        root_cause=diag.root_cause[:400],
+        steps=diag.steps,
+        tool_calls=diag.tool_calls,
+        cost_yuan=diag.cost_yuan,
+        input_tokens=diag.input_tokens,
+        output_tokens=diag.output_tokens,
+        elapsed_s=diag.elapsed_s,
+        finished=diag.finished,
+        parse_ok=diag.parse_ok,
+    )
+
+
+def _run_multi_slice(
+    client: DeepSeekClient,
+    ctx: RunContext,
+    fid: str,
+    rnd: int,
+    score: ScenarioScore,
+    model: str | None,
+    max_steps: int,
+) -> Attempt:
+    """跑一次完整的多 Agent 流程（三轮：调查 → 交叉质证 → 裁决）。
+
+    ⚠️ 步数预算与 baseline **必须一致** —— 否则就是 harness-log #13 那个坑：
+       一个配置差异会被当成能力差异。
+    """
+    from rca.agents.coordinator import diagnose_multi
+
+    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps)
+    verdict_text = res.verdict.root_cause
+    correct, _ = score.judge(verdict_text)
+
+    return Attempt(
+        fault_id=fid,
+        round_no=rnd,
+        correct=correct,
+        explanation=score.explain(verdict_text),
+        root_cause=verdict_text[:400],
+        # 统一口径：steps = 总 LLM 调用次数（baseline 的 steps 也是 LLM 轮次）
+        steps=res.n_llm_calls,
+        tool_calls=res.total_tool_calls,
+        cost_yuan=res.total_cost_yuan,
+        input_tokens=0,          # 多 Agent 的 token 汇总见 detail
+        output_tokens=0,
+        elapsed_s=res.elapsed_s,
+        finished=all(h.finished for h in res.hypotheses)
+        and all(c.finished for c in res.cross_exams)
+        and res.verdict.parse_ok,
+        parse_ok=res.verdict.parse_ok,
+        detail={
+            "accepted": res.verdict.accepted,
+            "n_rejected": len(res.verdict.rejected),
+            "rejected": res.verdict.rejected,
+            "dissent": res.verdict.dissent,
+            "n_changed_after_crossexam": sum(1 for c in res.cross_exams if c.changed),
+            "n_falsify_claims": sum(len(c.falsifies) for c in res.cross_exams),
+            "denied_tool_calls": res.denied_tool_calls,
+            "hypotheses": [h.to_dict() for h in res.hypotheses],
+            "cross_exams": [c.to_dict() for c in res.cross_exams],
+            "verdict": res.verdict.to_dict(),
+        },
+    )
 
 
 def load_report(path: Path) -> Report:
@@ -293,6 +366,7 @@ def load_report(path: Path) -> Report:
         mode=data["mode"],
         rounds=data["rounds"],
         started_at=data["started_at"],
+        agent=data.get("agent", "baseline"),
     )
     report.attempts = [Attempt(**a) for a in data["attempts"]]
     return report
@@ -306,7 +380,7 @@ def print_report(report: Report) -> None:
     print("=" * 96)
     print("  结果")
     print("=" * 96)
-    print(f"  模型 {report.model}   模式 {report.mode}  "
+    print(f"  {report.agent} 评测   模型 {report.model}   模式 {report.mode}  "
           f"{agg['n_rounds']} 轮 × {len(agg['per_fault'])} 场景 = {agg['n_attempts']} 次")
     if agg["n_rounds"] < 3:
         print("  ⚠️ 轮数少于 3，噪声带不可信 —— 单轮结果只是在如实反映'没测出波动'")
@@ -345,7 +419,7 @@ def print_report(report: Report) -> None:
 
 def save_report(report: Report) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = RUNS_DIR / "_eval" / f"baseline-{stamp}"
+    out_dir = RUNS_DIR / "_eval" / f"{report.agent}-{stamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "results.json"
     path.write_text(
@@ -361,12 +435,16 @@ def save_report(report: Report) -> Path:
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    p = argparse.ArgumentParser(description="单 Agent baseline 评测")
+    p = argparse.ArgumentParser(description="Agent 评测（baseline / 多 Agent）")
     p.add_argument("--faults", default=None, help="逗号分隔，如 F1,F2；默认全部")
     p.add_argument("--rounds", type=int, default=3)
     p.add_argument("--model", default=None, help="默认取配置里的便宜模型")
-    p.add_argument("--max-steps", type=int, default=8)
+    p.add_argument("--max-steps", type=int, default=14,
+                   help="LLM 轮次上限；实测最慢场景需 9 步，故默认 14。"
+                        "⚠️ 比较 baseline 与 multi 时必须用同一个值")
     p.add_argument("--mode", choices=["live", "record", "replay"], default="live")
+    p.add_argument("--agent", choices=["baseline", "multi"], default="baseline",
+                   help="baseline = 单 Agent；multi = 三个专职 Agent + 交叉质证 + 裁决")
     p.add_argument("--list-scenarios", action="store_true", help="只看有哪些场景可用")
     p.add_argument("--from-json", default=None,
                    help="从已保存的 results.json 重新出报告（不调用 LLM、不花钱）")
@@ -395,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         max_steps=args.max_steps,
         mode=args.mode,
+        agent=args.agent,
     )
     print_report(report)
     if report.attempts:

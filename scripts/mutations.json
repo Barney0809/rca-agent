@@ -1,0 +1,66 @@
+{
+  "cross_exam_prompt_render": {
+    "why": "harness-log: CROSS_EXAM_PROMPT contains a JSON output template, so str.format() treats its { } as placeholders and raises KeyError. Rendering was extracted into build_cross_exam_message() and must keep using str.replace().",
+    "tests": ["tests/test_agents.py"],
+    "mutations": [
+      {
+        "id": "m1-format-instead-of-replace",
+        "desc": "Re-inject the original defect: render with str.format(colleagues=...) instead of str.replace().",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "    return CROSS_EXAM_PROMPT.replace(\"{colleagues}\", _format_colleagues(own, others))",
+        "replace": "    return CROSS_EXAM_PROMPT.format(colleagues=_format_colleagues(own, others))",
+        "expect_red": [
+          "tests/test_agents.py::test_cross_exam_message_renders_colleagues_and_keeps_json_contract",
+          "tests/test_agents.py::test_cross_exam_message_survives_braces_in_colleague_claims",
+          "tests/test_agents.py::test_cross_exam_prompt_is_never_rendered_with_str_format"
+        ]
+      },
+      {
+        "id": "m2-inline-render-back-into-cross-examine",
+        "desc": "Inline the rendering back into cross_examine(), leaving build_cross_exam_message() as dead code. The behavioural tests stay green; only the structural test can catch this divergence.",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "            \"content\": build_cross_exam_message(own, others),",
+        "replace": "            \"content\": CROSS_EXAM_PROMPT.replace(\n                \"{colleagues}\", _format_colleagues(own, others)\n            ),",
+        "expect_red": [
+          "tests/test_agents.py::test_cross_examine_actually_calls_the_tested_renderer"
+        ]
+      }
+    ]
+  },
+  "stdout_gbk_guard": {
+    "why": "P4: when stdout is redirected, Python falls back to the local code page (GBK / cp936), so printing a character GBK cannot encode raises UnicodeEncodeError and throws away the whole output plus the exit code. The correct guard -- measured, not reasoned -- is reconfigure(encoding=\"utf-8\", errors=\"replace\"); both keywords are required.",
+    "tests": ["tests/test_offline.py"],
+    "mutations": [
+      {
+        "id": "p4-a-guard-on-the-wrong-stream",
+        "desc": "Guard sys.stderr instead of sys.stdout: the guard is textually present and looks right, but stdout still crashes.",
+        "file": "scripts/smoke_world.py",
+        "find": "    sys.stdout.reconfigure(encoding=\"utf-8\", errors=\"replace\")",
+        "replace": "    sys.stderr.reconfigure(encoding=\"utf-8\", errors=\"replace\")",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_p4_printing_scripts_guard_against_gbk_console"
+        ]
+      },
+      {
+        "id": "p4-b-guard-without-encoding",
+        "desc": "Drop encoding=\"utf-8\", keeping only errors=\"replace\". Nothing crashes any more, but the output stays GBK bytes and is unreadable to anything that reads UTF-8. This is exactly the mistake the author made first.",
+        "file": "scripts/smoke_world.py",
+        "find": "    sys.stdout.reconfigure(encoding=\"utf-8\", errors=\"replace\")",
+        "replace": "    sys.stdout.reconfigure(errors=\"replace\")",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_p4_printing_scripts_guard_against_gbk_console"
+        ]
+      },
+      {
+        "id": "p4-c-guard-that-does-nothing",
+        "desc": "Call reconfigure(encoding=\"utf-8\", errors=\"strict\"): strict IS the default, so the error mode is exactly equivalent to having no guard at all -- yet it looks identical to the real thing.",
+        "file": "scripts/smoke_world.py",
+        "find": "    sys.stdout.reconfigure(encoding=\"utf-8\", errors=\"replace\")",
+        "replace": "    sys.stdout.reconfigure(encoding=\"utf-8\", errors=\"strict\")",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_p4_printing_scripts_guard_against_gbk_console"
+        ]
+      }
+    ]
+  }
+}

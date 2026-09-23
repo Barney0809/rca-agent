@@ -177,6 +177,32 @@ extra_body={"thinking": {"type": "disabled"}}
 
 缓存是**自动**的、无需显式开启；实测在第 2 轮就出现命中（`cache_hit=128`）。
 
+**坑 4：stdout 被重定向到管道/文件时，Python 会用本地编码 GBK，打印 emoji 直接崩溃。**
+
+本机控制台代码页 936。`sys.stdout` 接到**真实控制台**时 Python 走 `WriteConsoleW`，
+不受代码页限制；但接到**管道或文件**时（脚本被上层采集、输出重定向）会退回 `cp936`，
+此时 `print("✅")` 抛 `UnicodeEncodeError`，**整段输出连同退出码一起丢掉**。
+
+三种写法实测对比（2026-09-24，`.venv` 下真实管道捕获，
+用 `scripts/probe_stdout_encoding.py` 复跑即可复现）：
+
+| 兜底写法 | 中文 | emoji | 结论 |
+|---|---|---|---|
+| 完全不兜底 | GBK 字节 | **崩溃** | ❌ |
+| `reconfigure(errors="replace")` | 仍是 GBK 字节 → 读成乱码 | `?` | ❌ 不崩但读不成 |
+| `reconfigure(encoding="utf-8", errors="replace")` | 正常 | 正常 | ✅ |
+
+**必须同时给 `encoding` 和 `errors`，缺一不可。** 只加 `errors="replace"`
+是个很自然的误判（本项目作者第一版就是这么写的，还配了"不要用 utf-8，会乱码"的错误注释，
+被上表直接推翻）。
+
+子进程同理：用 Python 启动子进程并重定向它的输出时，要给它
+`env["PYTHONIOENCODING"] = "utf-8"`，否则你声明的"UTF-8 日志"里其实是 GBK 字节。
+
+> 同一个编码机制在本项目已造成 **4 次**不同后果（删目录 / 脚本崩溃 / 数据读错 / 输出丢失），
+> 见 `docs/harness-log.md` #1 #2 #3 P4。封堵方式：`tests/test_offline.py` 的
+> `test_regression_p4_*` 自动检查（**会变红**，已用变异测试证明）。
+
 ### 版本与 API
 
 | 组件 | 版本 | 注意 |
@@ -199,13 +225,30 @@ extra_body={"thinking": {"type": "disabled"}}
 
 | 文件 | 内容 |
 |---|---|
+| `docs/00-状态.md` | **进度与下一步的唯一权威**（新会话先读这一份 + 本文件） |
 | `docs/01-需求分析.md` | 为什么做、必须满足什么、什么叫做完（含 ADR、验收标准 AC-1~AC-14） |
 | `docs/02-技术方案与排期.md` | 技术选型、架构、15 天逐日排期、牺牲顺序 |
 | `docs/03-事件流协议.md` | **D0 冻结**的接口契约（CLI 与前端共用） |
+| `docs/04-故障目录.md` | 六种故障的定义、症状/根因位置、标准答案 |
+| `docs/05-单Agent基线结果.md` | D5 baseline 的完整结论（含两次数字作废的记录） |
 | `docs/harness-log.md` | 错误封堵清单——每加一行，系统就少一类失败 |
 | `docs/adr/` | 架构决策记录 |
 
 **冲突时以 `docs/01-需求分析.md` 为准。**
+**进度、计数、完成状态以 `docs/00-状态.md` 为准，其他文档禁止复制。**
+
+### 工具
+
+| 命令 | 用途 |
+|---|---|
+| `scripts/dev.ps1` | 环境自检（解释器、依赖、Docker、Redis） |
+| `scripts/smoke_world.py` | 被诊断系统冒烟（18/18 通过才算链路是好的） |
+| `scripts/inject_fault.py` | 注入六种故障之一并记录变更事件 |
+| `scripts/reduce_run.py` | 遥测降维验证（产出压缩率证据） |
+| `scripts/mutate_check.py` | **变异检查**：证明回归用例真的能变红（`--list` 看所有变异组） |
+| `eval/runner.py` | 评测运行器（`--agent baseline|multi`） |
+
+所有 Python 脚本**必须**用 `.\.venv\Scripts\python.exe` 或 `uv run python` 执行。
 
 ---
 

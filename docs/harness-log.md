@@ -149,15 +149,17 @@ FAIL langchain_core  ...
 | #11 | **噪声带算错**：把常数伪装成统计量 | ✅ | ✅ 3 条 | ✅ 变异测试 | 🟢 **已封堵** |
 | **#12** | **指标未被场景窗口化 → Agent 读到脏数据** | ✅ | ✅ 6 条 | ✅ 变异测试 | 🟢 **已封堵** |
 | **#13** | **随手定的 `max_steps` 改变了"准确率"** | ✅ | ✅ 4 条 | ✅ 变异测试 | 🟢 **已封堵** |
+| **#14** | **交叉质证 prompt 渲染崩溃**（JSON 模板被当占位符） | ✅ | ✅ 4 条 | ✅ 变异测试（2 个变异体） | 🟢 **已封堵** |
 
-**工作过程缺陷（P1/P2/P3）** —— 它们**没有代码可测**，只能靠流程纪律。
-按项目原则如实标注为「**靠人**」，而不是假装已封堵：
+**工作过程缺陷（P1–P4）** —— 它们**没有可测的行为缺陷**，只能靠流程纪律或工具兜底。
+按项目原则如实标注，不假装已封堵：
 
 | # | 缺陷 | 封堵方式 | 自动检查 |
 |---|---|---|---|
 | P1 | 用系统 python 而非 .venv → 得到误导性结论 | 流程 + `dev.ps1` 交叉检查解释器 | ⚠️ 部分（靠人看自检输出） |
 | P2 | 批量替换写出重复行 | 流程：改完读回 + grep 计数对比 | ❌ 靠人 |
 | P3 | 提交信息里的双引号被 PowerShell 截断 | 流程：用 `-F <文件>` + 核对 `git log` | ❌ 靠人 |
+| **P4** | **脚本打印非 ASCII 时崩溃，整段输出与结论一起丢失** | 脚本 stdout 兜底 + **自动检查** | ✅ **已自动化**（`test_regression_p4_*`，变异测试证明能变红） |
 
 ### 🟡 #1 的部分封堵状态（D4 更新）
 
@@ -1006,6 +1008,220 @@ F3  在 max_steps=14 时：100% ← 三轮全部答对，平均用 9 步
 > **本条与 #11（噪声带算错）是同一类问题**：
 > **数字算出来了，但它测的不是你以为的那个东西。**
 > #11 是把常数伪装成统计量；本条是把配置问题伪装成能力问题。
+
+---
+
+## #14　交叉质证 prompt 渲染崩溃：JSON 模板被当成占位符
+
+**日期**：2026-09-24（D7）
+**损失**：无（在跑多 Agent 闭环前被单测抓住）。但**如果不修，整个 D7 是跑不起来的** ——
+每一轮交叉质证都会在发请求之前就抛异常。
+
+### 现象
+
+`coordinator.py` 的 `CROSS_EXAM_PROMPT` 里含有一段 **JSON 输出契约**：
+
+```
+最后一次回复必须是纯 JSON：
+{
+  "revised_claim": "...",
+  "confidence": 0.0,
+  ...
+}
+```
+
+渲染时用了 `str.format`：
+
+```python
+CROSS_EXAM_PROMPT.format(colleagues=...)
+```
+
+`str.format` 把 `{` `}` 当成**占位符**，于是抛：
+
+```
+KeyError: '\n  "revised_claim"'
+```
+
+### 根因
+
+**"含 `{}` 的文本"和"format 模板"是两种完全不同的东西，但长得一模一样。**
+
+这类错误特别容易漏，因为它**只有在渲染那一刻才炸**：
+prompt 是模块级常量，import 时不报错；写的时候看那段 JSON 也觉得"就是个字符串"。
+
+### 封堵措施
+
+1. 渲染改用 `str.replace("{colleagues}", ...)` —— 只替换指定的那一个标记，其余原样保留。
+2. **把渲染抽成纯函数 `build_cross_exam_message()`**。
+
+第 2 条才是关键。原来的渲染写在 `cross_examine()` 内部，而 `cross_examine` 要发网络请求，
+**测试调不动它** —— 也就是说"有人把 replace 改回 format"这个回归，
+跑测试**根本执行不到那一行**。
+
+> 这一步和 #6（解析漏行）是同一个教训的两面：
+> **一个只在深层调用里、没有独立入口的逻辑，等于测不到的逻辑。**
+
+### 回归用例
+
+`tests/test_agents.py` 4 条，分两个面：
+
+**行为面**（走真实渲染函数）：
+- `test_cross_exam_message_renders_colleagues_and_keeps_json_contract`
+  同时检查"同事结论塞进去了"和"JSON 契约字段一个都没丢"。
+- `test_cross_exam_message_survives_braces_in_colleague_claims`
+  同事结论里**自带 `{}`** 时也不能炸 —— 这不是假想：LLM 很爱在结论里直接贴 JSON 片段。
+
+**结构面**（AST）：
+- `test_cross_exam_prompt_is_never_rendered_with_str_format`
+  只钉 `CROSS_EXAM_PROMPT` 这一个对象，不做全模块 `.format` 禁令，避免误伤。
+- `test_cross_examine_actually_calls_the_tested_renderer`
+  **保证生产路径真的在调用被测试的那个函数。**
+
+### 状态
+
+- [x] 已修：`.format` → `.replace`，并抽出 `build_cross_exam_message()`
+- [x] 回归用例已落地（4 条）
+- [x] **已证明能变红** —— 变异测试（`scripts/mutate_check.py`，2 个变异体）：
+  - `m1-format-instead-of-replace` → 3 条用例变红，报的正是
+    `KeyError: '\n  "revised_claim"'`（**变红原因就是原缺陷本身，不是碰巧**）
+  - `m2-inline-render-back-into-cross-examine` → 只有 1 条结构面用例变红
+
+> **m2 是这组里最有价值的变异体。**
+> 它把渲染**内联回** `cross_examine()`，同时把 `build_cross_exam_message` 留成死代码 ——
+> 此时全部**行为面**用例依然是绿的（它们测的是那个没人调用的函数），
+> 只有结构面用例能发现"生产路径已经绕过了被测试的代码"。
+> 如果没有 m2，我会误以为"4 条用例守住了一切"。
+
+---
+
+## P4　脚本打印非 ASCII 时崩溃，把整段结论一起丢掉
+
+**日期**：2026-09-24（D7）
+**损失**：无（当场发现）。但这类错误**专挑最后一步发作**，代价被放大过。
+
+### 现象
+
+新写的变异检查脚本 `scripts/mutate_check.py` 第一次运行，
+在**打印结果的那一行**抛：
+
+```
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2713' in position 2
+```
+
+它**已经跑完了全部检查**（包括两次 pytest、对照组、变异体），
+只因为要打印一个 `✓` 就崩了 —— 整段输出和结论全没了，看起来像"脚本是坏的"。
+
+### 根因
+
+本机控制台代码页 936。`sys.stdout` 接**真实控制台**时 Python 走 `WriteConsoleW`，不受代码页限制；
+但接**管道/文件**时（上层采集输出）退回 `cp936`，编不出的字符直接抛异常。
+
+这是同一个编码机制的**第 4 次**不同后果：
+
+| 次序 | 后果 | 条目 |
+|---|---|---|
+| 1 | 路径解析错位 → **删除了一个真实目录（不可恢复）** | #1 |
+| 2 | 脚本语法解析错位 → 脚本崩溃 | #2 |
+| 3 | 数据解析错位 → PowerShell 读 JSON 失败 | #3 |
+| 4 | **输出编码错位 → 整段输出与结论丢失** | P4 |
+
+### 封堵措施
+
+**关键的一步是"先做实验，再做决定"。**
+
+第一版凭直觉写成 `reconfigure(errors="replace")`，并配了一段注释说
+"不要用 `encoding="utf-8"`，那会让 GBK 控制台里的中文变成乱码"。
+这个论断**听起来很合理，但是错的**。于是写了 `scripts/probe_stdout_encoding.py`，
+在真实管道下把三种写法各跑一遍（这个探测脚本**留在仓库里**，面试官可重跑验证）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\probe_stdout_encoding.py none      # -> CRASH（exit 1）
+.\.venv\Scripts\python.exe scripts\probe_stdout_encoding.py replace   # -> 不崩，但中文乱码
+.\.venv\Scripts\python.exe scripts\probe_stdout_encoding.py utf8      # -> 中文与 emoji 都正常
+```
+
+| 兜底写法 | 中文 | emoji | 结论 |
+|---|---|---|---|
+| 完全不兜底 | GBK 字节 | **崩溃** | ❌ |
+| `reconfigure(errors="replace")` | 仍是 GBK 字节 → 上层按 UTF-8 读全是乱码 | `?` | ❌ 不崩，但读不成 |
+| `reconfigure(encoding="utf-8", errors="replace")` | 正常 | 正常 | ✅ |
+
+结论：**必须同时给 `encoding` 和 `errors`**。
+仓库里另外 6 个脚本**早就**是这个写法（说明这个坑以前踩过、当时改对了），
+我加的那 6 处反而既重复又更弱 —— 已全部改回原状（`git diff -- scripts` 为空）。
+
+另外修掉了两处自己埋的坑：
+
+- 变异副本原本放在 `runs/_mutants/`。而 `tests/test_offline.py` 的 #3 编码检查
+  用"路径里出现 `runs` 就跳过"排除目录，于是把副本里**所有文件**都跳过了，
+  扫到 0 个脚本 —— **对照组当场变红**（这正是对照组存在的意义）。
+  两处都改了：副本移到仓库外的 `../rca-mutants/`；目录匹配改为按**相对路径**判断。
+- 变异脚本给 pytest 的日志文件声明了 `encoding="utf-8"`，但子进程按 GBK 写 ——
+  "UTF-8 日志"里其实是 GBK 字节，证据打不开。已给子进程加 `PYTHONIOENCODING=utf-8`。
+
+### 回归用例
+
+`tests/test_offline.py` 2 条：
+
+- `test_regression_p4_printing_scripts_guard_against_gbk_console`
+- `test_regression_p4_the_scan_actually_found_printing_scripts`（元测试：防止"扫了 0 个文件"的假绿）
+
+用例**一路查到 `encoding=` 与 `errors=` 的取值上**，而不是只查"有没有调用 `reconfigure`"。
+理由见下。
+
+### 状态
+
+- [x] 已修：`mutate_check.py` 改用实测确认的写法；其余 6 个脚本的重复守卫已还原
+- [x] 归入 `AGENTS.md` 第 4 条"已实测的坑 4"，含实测对照表
+- [x] 回归用例已落地（2 条）
+- [x] **已证明能变红** —— 变异测试（`scripts/mutate_check.py`，3 个变异体）：
+
+  | 变异体 | 做法 | 结果 |
+  |---|---|---|
+  | `p4-a-guard-on-the-wrong-stream` | 守卫 `sys.stderr` 而不是 `sys.stdout` | ✅ 变红 |
+  | `p4-b-guard-without-encoding` | 去掉 `encoding="utf-8"`，只留 `errors="replace"` | ✅ 变红 |
+  | `p4-c-guard-that-does-nothing` | `errors="strict"`（默认值，等于没加） | ✅ 变红 |
+
+> **`p4-b` 和 `p4-c` 是专门用来攻击"用例是不是装饰品"的。**
+> `errors="strict"` 与不调用 `reconfigure` 完全等价，但在源码里长得和真守卫一模一样；
+> `p4-b` 则正是我自己写错的那个版本。
+> 如果用例只检查"有没有调用 `reconfigure`"，这两个变异体都会**全绿** ——
+> 那时用例就成了摆设：看着在守护，实际什么都守护不了。
+
+> **元教训**：这一条从"现象"到"结论"中间隔了一次**实验**。
+> 直觉给出的修法（只加 `errors`）不但没用，还会把输出悄悄变成乱码 ——
+> 比崩溃更难发现。**凭直觉的"合理修法"必须实测验证。**
+
+---
+
+## 🧪 变异检查工具（`scripts/mutate_check.py`）
+
+从 #14 起，本项目把"**能变红**"从口头声明变成**可执行证据**。
+
+```powershell
+# 看有哪些变异组
+.\.venv\Scripts\python.exe scripts\mutate_check.py --list
+
+# 跑某一组：先跑对照组（不注入缺陷，必须全绿），再逐个注入缺陷（必须变红）
+.\.venv\Scripts\python.exe scripts\mutate_check.py --group cross_exam_prompt_render
+.\.venv\Scripts\python.exe scripts\mutate_check.py --group stdout_gbk_guard
+```
+
+变异定义在 `scripts/mutations.json`（**数据而不是代码**，D9 的封堵清单可直接遍历它）。
+
+设计要点：
+
+| 机制 | 为什么必须这样 |
+|---|---|
+| **副本变异，真实源码一个字节都不碰** | 第 0 条禁止删除；"改完再还原"依赖人记得还原——而 #1 已经证明"靠人记得"会出事 |
+| 副本放仓库**外**（`../rca-mutants/`） | 放在 `runs/` 下会被目录遍历类测试整片跳过（当场被对照组抓到） |
+| **每次先跑对照组** | 副本本身坏掉时用例也会"变红"，那是**假红**，什么都证明不了 |
+| **自证副本被加载**（打印 `rca.__file__`） | 将来若改成 editable 安装，MetaPathFinder 会优先于 `pythonpath`，变异根本没生效 |
+| 要求变红的**是预期的那几条**用例 | 防止"碰巧红了"被当成封堵成功 |
+| 非零退出码 | 可以当门禁接进 CI |
+
+**结论只有两种**：`IS SEALED` / `NOT SEALED`。
+没有"应该没问题"。
 
 ---
 
