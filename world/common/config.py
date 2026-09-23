@@ -47,6 +47,8 @@ from dataclasses import dataclass, field
 
 import redis.asyncio as aioredis
 
+from .runtime import Knobs
+
 
 def _env_str(key: str, default: str) -> str:
     return os.environ.get(key, default)
@@ -97,9 +99,13 @@ class Settings:
     downstream_timeout_ms: int = 3000
     retry_backoff_ms: int = 100
 
-    # --- 外部依赖（模拟第三方风控，本身就会慢）---
+    # --- 外部依赖（模拟第三方风控）---
+    # 风控的延迟与错误率是两条独立故障线（F1 慢 / F5 错）。
+    # 它们放在这里而不是散在 payment 里，是为了后续加故障注入时统一收口。
     external_url: str = ""
     external_timeout_ms: int = 2000
+    risk_latency_ms: int = 30
+    risk_error_rate: float = 0.0
 
     # --- 业务参数 ---
     extra: dict[str, str] = field(default_factory=dict)
@@ -125,6 +131,22 @@ def load_settings(service: str) -> Settings:
         retry_backoff_ms=_env_int(g + "RETRY_BACKOFF_MS", 100),
         external_url=_env_str(p + "EXTERNAL_URL", ""),
         external_timeout_ms=_env_int(p + "EXTERNAL_TIMEOUT_MS", 2000),
+        risk_latency_ms=_env_int(p + "RISK_LATENCY_MS", 30),
+        risk_error_rate=_env_float(p + "RISK_ERROR_RATE", 0.0),
+    )
+
+
+def knobs_from(settings: Settings) -> Knobs:
+    """把启动配置装进运行时可调参数（Knobs）。
+
+    启动值来自环境变量；之后可以通过 `/_inject` 端点在不重启的情况下修改。
+    见 world/common/runtime.py。
+    """
+    return Knobs(
+        pool_limit=settings.pool_size,
+        downstream_retries=settings.downstream_retries,
+        risk_latency_ms=settings.risk_latency_ms,
+        risk_error_rate=settings.risk_error_rate,
     )
 
 
@@ -137,25 +159,49 @@ class PoolExhausted(RuntimeError):
 
 
 class RedisPool:
-    """带等待时长测量的 Redis 连接池。
+    """连接池：容量**可在运行时调整**，并测量每次获取的等待时长。
 
-    实现方式：一个计数信号量（asyncio.Semaphore）。
-    Semaphore 的概念和 Java 的 java.util.concurrent.Semaphore 完全一样：
-        获取许可（acquire）→ 用 → 归还许可（release）
-        许可用完时，acquire 会一直等，直到有人 release。
+    ============================ 为什么不用 asyncio.Semaphore ============================
 
-    我们额外做的是：把"等了多久"量出来，写进日志。
+    第一版用的是 Semaphore（对应 Java 的 java.util.concurrent.Semaphore），
+    但 Semaphore **创建后容量不可改**。
+
+    而 F2 这个场景要求"连接池容量被改小"是一条真实的配置变更 ——
+    所以池容量必须能在运行时调整。
+
+    于是改成 hand-rolled 实现：一个计数器 + 一个条件变量
+    （asyncio.Condition，对应 Java 的 Condition + await/signal）：
+
+        容量没满 → 计数 +1，放行
+        容量满了 → 在条件变量上等，直到有人释放并唤醒
+        等太久   → 超时，抛 PoolExhausted
+
+    ============================ 这个类最重要的产出 ============================
+
+    不是"借还连接"，而是**等待时长**。它是诊断"连接池耗尽"的第一手证据：
+
+        等 0ms      → 正常
+        等 800ms    → 池开始紧张（记 WARNING，比 ERROR 更早出现）
+        等 12000ms  → 超时失败（记 ERROR）★ 这就是故障信号
+
+    =============================================================================
     """
 
-    def __init__(self, settings: Settings, log) -> None:
+    def __init__(self, settings: Settings, log, knobs: Knobs) -> None:
         self._settings = settings
         self._log = log
-        self._sem = asyncio.Semaphore(settings.pool_size)
-        self._size = settings.pool_size
+        self._knobs = knobs
         self._in_flight = 0
+        self._cond = asyncio.Condition()
         self._client = aioredis.Redis.from_url(
             settings.redis_url, decode_responses=True
         )
+
+    @property
+    def limit(self) -> int:
+        """当前容量。**直接读 Knobs**，所以运行时改 Knobs 立即生效，
+        不需要任何同步回调。"""
+        return max(1, int(self._knobs.pool_limit))
 
     @property
     def in_flight(self) -> int:
@@ -183,35 +229,48 @@ class RedisPool:
         """
         s = self._settings
         started = time.perf_counter()
+        acquired = False
 
         try:
-            await asyncio.wait_for(
-                self._sem.acquire(), timeout=s.pool_acquire_timeout_ms / 1000
-            )
-        except (TimeoutError, asyncio.TimeoutError):
+            try:
+                async with self._cond:
+                    deadline = started + s.pool_acquire_timeout_ms / 1000
+                    # 容量满了就在这儿等；被 notify 唤醒后重新检查（防虚假唤醒）
+                    while self._in_flight >= self.limit:
+                        remaining = deadline - time.perf_counter()
+                        if remaining <= 0:
+                            raise PoolExhausted("deadline")
+                        await asyncio.wait_for(self._cond.wait(), timeout=remaining)
+                    self._in_flight += 1
+                    acquired = True
+
+            except (PoolExhausted, TimeoutError, asyncio.TimeoutError):
+                waited_ms = int((time.perf_counter() - started) * 1000)
+                # ★ 这条日志就是"连接池耗尽"的第一手证据
+                self._log.error(
+                    f"连接池获取超时：等待 {waited_ms}ms 后放弃"
+                    f"（池大小={self.limit}，当前在途={self._in_flight}）",
+                    extra={"trace": trace},
+                )
+                raise PoolExhausted(
+                    f"redis pool exhausted after {waited_ms}ms "
+                    f"(limit={self.limit}, in_flight={self._in_flight})"
+                ) from None
+
             waited_ms = int((time.perf_counter() - started) * 1000)
-            # ★ 这条日志就是"连接池耗尽"的第一手证据
-            self._log.error(
-                f"连接池获取超时：等待 {waited_ms}ms 后放弃"
-                f"（池大小={self._size}，当前在途={self._in_flight}）",
-                extra={"trace": trace},
-            )
-            raise PoolExhausted(
-                f"redis pool exhausted after {waited_ms}ms "
-                f"(size={self._size}, in_flight={self._in_flight})"
-            ) from None
-
-        waited_ms = int((time.perf_counter() - started) * 1000)
-        self._in_flight += 1
-        try:
             if waited_ms >= s.pool_warn_ms:
-                # 池开始紧张但还没坏——这是"故障前兆"，比 ERROR 更早出现
+                # 池开始紧张但还没坏 —— "故障前兆"，比 ERROR 更早出现
                 self._log.warning(
-                    f"连接池等待 {waited_ms}ms（池大小={self._size}，"
+                    f"连接池等待 {waited_ms}ms（池大小={self.limit}，"
                     f"当前在途={self._in_flight}）",
                     extra={"trace": trace},
                 )
+
             yield self._client
+
         finally:
-            self._in_flight -= 1
-            self._sem.release()
+            # 只有真正拿到过才归还，否则会把计数减成负数
+            if acquired:
+                async with self._cond:
+                    self._in_flight -= 1
+                    self._cond.notify_all()

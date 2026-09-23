@@ -40,15 +40,20 @@ async def call_downstream(
     trace: str,
     log: TraceLogger,
     metrics: Metrics,
+    retries: int,
 ) -> dict:
     """调用下游服务，返回它的 JSON 响应。
 
     参数都写成"关键字参数"（前面带 *），是为了调用处一眼能看懂每个值是什么。
     对应 Java：相当于强制使用命名参数（Java 没有这特性，但思路类似 Builder）。
+
+    `retries` 单独传进来而不用 settings 里的值，是因为它必须能在**运行时**改
+    （F4「重试风暴」就是把它从 1 改成 5）。settings 是启动时读死的，
+    运行时的值放在 Knobs 里。
     """
     name = settings.downstream_name or "downstream"
     url = settings.downstream_url.rstrip("/") + path
-    attempts = max(1, settings.downstream_retries)
+    attempts = max(1, retries)
     timeout_s = settings.downstream_timeout_ms / 1000
 
     last_error: Exception | None = None

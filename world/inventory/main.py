@@ -12,6 +12,7 @@ inventory 服务 —— 链路中间环节。
 
 from __future__ import annotations
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -20,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from world.common.config import PoolExhausted, RedisPool, load_settings
+from world.common.config import PoolExhausted, RedisPool, knobs_from, load_settings
 from world.common.downstream import DownstreamFailed, call_downstream
 from world.common.obs import (
     TRACE_HEADER,
@@ -29,16 +30,20 @@ from world.common.obs import (
     new_trace_id,
     setup_logging,
 )
+from world.common.runtime import make_inject_router
 
 settings = load_settings("inventory")
 setup_logging(settings.service, settings.log_level)
 log = get_logger(settings.service)
 metrics = Metrics(settings.service)
 
+knobs = knobs_from(settings)
+
 metrics.describe("requests_total", "收到的业务请求数")
 metrics.describe("downstream_duration_ms", "调用下游的耗时（毫秒）")
 metrics.describe("downstream_calls_total", "调用下游的次数")
 metrics.describe("pool_in_flight", "当前占用中的连接数")
+metrics.describe("pool_limit", "连接池当前容量")
 metrics.describe("handler_duration_ms", "本服务处理一次请求的耗时（毫秒）")
 metrics.describe("stock_level", "当前库存量")
 
@@ -48,7 +53,7 @@ DEFAULT_STOCK = 1000
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.pool = RedisPool(settings, log)
+    app.state.pool = RedisPool(settings, log, knobs)
     app.state.http = httpx.AsyncClient()
 
     # 初始化库存：只在键不存在时写入，重启不会把库存重置掉。
@@ -59,8 +64,8 @@ async def lifespan(app: FastAPI):
 
     log.info(
         f"服务启动 service={settings.service} port={settings.port} "
-        f"池大小={settings.pool_size} 下游={settings.downstream_name or '(无)'} "
-        f"重试次数={settings.downstream_retries}"
+        f"池大小={knobs.pool_limit} 下游={settings.downstream_name or '(无)'} "
+        f"重试次数={knobs.downstream_retries}"
     )
     yield
     await app.state.pool.close()
@@ -69,6 +74,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="inventory", lifespan=lifespan)
+
+# 故障注入端点。⚠️ 刻意不写任何日志 —— 见 world/common/runtime.py。
+app.include_router(make_inject_router(knobs))
 
 
 class ReserveRequest(BaseModel):
@@ -88,6 +96,7 @@ async def metrics_endpoint(request: Request):
     request.app.state.pool and metrics.set_gauge(
         "pool_in_flight", request.app.state.pool.in_flight
     )
+    request.app.state.pool and metrics.set_gauge("pool_limit", request.app.state.pool.limit)
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 
@@ -106,6 +115,15 @@ async def reserve(body: ReserveRequest, request: Request):
     stock_key = f"stock:{body.sku}"
 
     try:
+        # ---- F3（本环节处理变慢）的注入点 ----
+        # ⚠️ 刻意放在连接池【之外】。
+        #    如果放在池内，它会把连接一直占住，从而也触发连接池耗尽 ——
+        #    那样 F3 与 F2 的机制就混在一起，Agent 无法区分是哪一种。
+        #    放在池外，F3 就是干净的"这一层自己慢"，可与 F1（下游慢）
+        #    通过"耗时断层在哪一层"区分开。
+        if knobs.slow_op_ms > 0:
+            await asyncio.sleep(knobs.slow_op_ms / 1000)
+
         async with pool.acquire(trace) as r:
             raw = await r.get(stock_key)
             if raw is None:
@@ -141,6 +159,7 @@ async def reserve(body: ReserveRequest, request: Request):
                 trace=trace,
                 log=log,
                 metrics=metrics,
+                retries=knobs.downstream_retries,
             )
 
     except PoolExhausted as exc:

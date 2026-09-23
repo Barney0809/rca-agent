@@ -22,7 +22,7 @@ payment 服务 —— 链路的末端（叶子节点）。
 from __future__ import annotations
 
 import asyncio
-import os
+import random
 import time
 from contextlib import asynccontextmanager
 
@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from world.common.config import PoolExhausted, RedisPool, load_settings
+from world.common.config import PoolExhausted, RedisPool, knobs_from, load_settings
 from world.common.obs import (
     TRACE_HEADER,
     Metrics,
@@ -39,24 +39,20 @@ from world.common.obs import (
     new_trace_id,
     setup_logging,
 )
+from world.common.runtime import make_inject_router
 
 settings = load_settings("payment")
 setup_logging(settings.service, settings.log_level)
 log = get_logger(settings.service)
 metrics = Metrics(settings.service)
 
+knobs = knobs_from(settings)
+
 metrics.describe("requests_total", "收到的业务请求数")
 metrics.describe("pool_in_flight", "当前占用中的连接数")
+metrics.describe("pool_limit", "连接池当前容量")
 metrics.describe("handler_duration_ms", "本服务处理一次请求的耗时（毫秒）")
 metrics.describe("risk_control_duration_ms", "调用外部风控的耗时（毫秒）")
-
-# 模拟外部风控的延迟（毫秒）。
-#
-# 这里直接读环境变量而不是走 Settings 类，是为了不在 D1 阶段
-# 改动 world/common/config.py（该文件尚未提交，按项目规则不动它）。
-# D2 做故障注入时会统一收进 Settings。
-RISK_CONTROL_LATENCY_MS = int(os.environ.get("W_PAYMENT_RISK_LATENCY_MS", "30"))
-RISK_CONTROL_ERROR_RATE = float(os.environ.get("W_PAYMENT_RISK_ERROR_RATE", "0"))
 
 
 async def _call_risk_control(trace: str) -> dict:
@@ -68,12 +64,14 @@ async def _call_risk_control(trace: str) -> dict:
       - 它超时你的重试会让它更慢
     """
     started = time.perf_counter()
-    if RISK_CONTROL_LATENCY_MS > 0:
-        await asyncio.sleep(RISK_CONTROL_LATENCY_MS / 1000)
 
-    import random
+    # F1：风控变慢。延迟读自 knobs，可在运行时注入。
+    latency_ms = knobs.risk_latency_ms
+    if latency_ms > 0:
+        await asyncio.sleep(latency_ms / 1000)
 
-    if RISK_CONTROL_ERROR_RATE > 0 and random.random() < RISK_CONTROL_ERROR_RATE:
+    # F5：风控按概率报错。同样可运行时注入。
+    if knobs.risk_error_rate > 0 and random.random() < knobs.risk_error_rate:
         elapsed_ms = (time.perf_counter() - started) * 1000
         metrics.observe("risk_control_duration_ms", elapsed_ms)
         metrics.inc("requests_total", endpoint="risk_control", result="error")
@@ -100,12 +98,12 @@ async def _call_risk_control(trace: str) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.pool = RedisPool(settings, log)
+    app.state.pool = RedisPool(settings, log, knobs)
     app.state.http = httpx.AsyncClient()
     log.info(
         f"服务启动 service={settings.service} port={settings.port} "
-        f"池大小={settings.pool_size} "
-        f"风控延迟={RISK_CONTROL_LATENCY_MS}ms 风控错误率={RISK_CONTROL_ERROR_RATE}"
+        f"池大小={knobs.pool_limit} "
+        f"风控延迟={knobs.risk_latency_ms}ms 风控错误率={knobs.risk_error_rate}"
     )
     yield
     await app.state.pool.close()
@@ -114,6 +112,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="payment", lifespan=lifespan)
+
+# 故障注入端点。⚠️ 刻意不写任何日志 —— 见 world/common/runtime.py。
+app.include_router(make_inject_router(knobs))
 
 
 class ChargeRequest(BaseModel):
@@ -134,6 +135,7 @@ async def metrics_endpoint(request: Request):
     request.app.state.pool and metrics.set_gauge(
         "pool_in_flight", request.app.state.pool.in_flight
     )
+    request.app.state.pool and metrics.set_gauge("pool_limit", request.app.state.pool.limit)
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 

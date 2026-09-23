@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from world.common.config import PoolExhausted, RedisPool, load_settings
+from world.common.config import PoolExhausted, RedisPool, knobs_from, load_settings
 from world.common.downstream import DownstreamFailed, call_downstream
 from world.common.obs import (
     TRACE_HEADER,
@@ -29,17 +29,27 @@ from world.common.obs import (
     new_trace_id,
     setup_logging,
 )
+from world.common.runtime import make_inject_router
 
 settings = load_settings("order")
 setup_logging(settings.service, settings.log_level)
 log = get_logger(settings.service)
 metrics = Metrics(settings.service)
 
+# 运行时可调参数。初始值来自环境变量，之后可经 /_inject 在线修改。
+knobs = knobs_from(settings)
+
+# ⚠️ F6（内存泄漏，对照组）用的容器：只增不减。
+# 只有注入时才会被写入；不注入时它是空的，对正常路径零影响。
+_LEAK: dict[str, bytes] = {}
+
 metrics.describe("requests_total", "收到的业务请求数")
 metrics.describe("downstream_duration_ms", "调用下游的耗时（毫秒）")
 metrics.describe("downstream_calls_total", "调用下游的次数")
 metrics.describe("pool_in_flight", "当前占用中的连接数")
+metrics.describe("pool_limit", "连接池当前容量")
 metrics.describe("handler_duration_ms", "本服务处理一次请求的耗时（毫秒）")
+metrics.describe("leak_bytes", "F6 注入时累积的泄漏字节数")
 
 
 @asynccontextmanager
@@ -49,13 +59,13 @@ async def lifespan(app: FastAPI):
     `yield` 之前 = 启动时；之后 = 停止时。
     对应 Java：@PostConstruct 和 @PreDestroy。
     """
-    app.state.pool = RedisPool(settings, log)
+    app.state.pool = RedisPool(settings, log, knobs)
     app.state.http = httpx.AsyncClient()
 
     ok = await app.state.pool.ping()
     log.info(
         f"服务启动 service={settings.service} port={settings.port} "
-        f"池大小={settings.pool_size} 下游={settings.downstream_name or '(无)'} "
+        f"池大小={knobs.pool_limit} 下游={settings.downstream_name or '(无)'} "
         f"redis={'可用' if ok else '不可用'}"
     )
     yield
@@ -65,6 +75,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="order", lifespan=lifespan)
+
+# 故障注入端点。⚠️ 它刻意不写任何日志 —— 见 world/common/runtime.py 的说明。
+app.include_router(make_inject_router(knobs))
 
 
 class OrderRequest(BaseModel):
@@ -93,6 +106,7 @@ async def metrics_endpoint(request: Request):
     request.app.state.pool and metrics.set_gauge(
         "pool_in_flight", request.app.state.pool.in_flight
     )
+    request.app.state.pool and metrics.set_gauge("pool_limit", request.app.state.pool.limit)
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 
@@ -112,6 +126,12 @@ async def create_order(body: OrderRequest, request: Request):
 
     pool: RedisPool = request.app.state.pool
     try:
+        # ---- F6（内存泄漏，对照组）的注入点 ----
+        # 只有 knobs.leak_mb_per_req > 0 时才泄漏；默认 0，对正常路径零影响。
+        if knobs.leak_mb_per_req > 0:
+            _LEAK[order_id] = b"x" * int(knobs.leak_mb_per_req * 1024 * 1024)
+            metrics.set_gauge("leak_bytes", sum(len(v) for v in _LEAK.values()))
+
         # ⚠️⚠️ 刻意的反模式 ⚠️⚠️
         #
         # 下面这段把 Redis 连接【借出来之后一直拿着】，中间还跨网络去调
@@ -147,6 +167,7 @@ async def create_order(body: OrderRequest, request: Request):
                 trace=trace,
                 log=log,
                 metrics=metrics,
+                retries=knobs.downstream_retries,
             )
 
             await r.hset(f"order:{order_id}", mapping={"status": "CONFIRMED"})
