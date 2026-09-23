@@ -322,8 +322,17 @@ def print_report(report: Report) -> None:
           f"    轮间噪声带 ¥{agg['cost_band_yuan'][0]:.4f}–¥{agg['cost_band_yuan'][1]:.4f}")
     print(f"     总计     ¥{agg['total_cost_yuan']:.4f}")
     print()
-    print(f"  收敛率（没撞上步数上限）{agg['fully_converged_rate']:.0%}"
+    conv = agg["fully_converged_rate"]
+    print(f"  收敛率（没撞上步数上限）{conv:.0%}"
           f"   JSON 解析成功率 {agg['json_parse_rate']:.0%}")
+    if conv < 1.0:
+        # ⚠️ 这一条不是客套话，是 harness-log #13 的封堵。
+        #    未收敛的尝试会被记成「答错」，但那是**配置问题**（步数预算不足），
+        #    不是模型的归因能力问题。混在一起会让后续所有比较失去意义。
+        print()
+        print("  ⚠️ 收敛率不足 100% ⇒ **准确率不可用于比较**。")
+        print("     未收敛的尝试会被记成「答错」，但那是配置问题（步数预算不足），")
+        print("     不是模型的归因能力问题。请提高 --max-steps 后重测，再做比较。")
     print()
     print("  ── 逐个场景 ──")
     print(f"  {'ID':<4} {'场景':<30} {'准确率':<8} {'步数':<6} {'工具':<6} {'成本':<10}")
