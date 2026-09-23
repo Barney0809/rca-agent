@@ -32,6 +32,11 @@ dependencies = [
     "tiktoken>=0.14.0",
     "structlog>=26.1.0",
     "python-dotenv>=1.0.1",
+
+    # --- 被诊断系统的公共代码（world/common）在本机也要能 import ---
+    # 理由：world/common/config.py 需要 redis 客户端；而流量生成器、
+    # 故障注入驱动、回归测试都是从本机跑的，必须能 import world.*。
+    "redis>=5.0",
 ]
 
 [dependency-groups]
@@ -49,7 +54,9 @@ target-version = "py313"
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "eval"]
+testpaths = ["tests"]
+# 让 `from world.xxx import ...` 在测试里可用（项目根加入 sys.path）
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-q"
 

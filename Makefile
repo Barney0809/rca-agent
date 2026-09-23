@@ -47,15 +47,16 @@ check: lint test
 
 dev: world-up
 
-# 启动被诊断系统（一条命令起全栈）
+# Start the diagnosed system (one command brings up the whole stack)
 world-up:
 	docker compose up -d --build
 	@echo ""
 	@echo "world is up. business entry point: http://127.0.0.1:8080"
 	@echo "verify the chain with: make smoke"
 
-# 只停止，不删除容器。
-# 刻意不提供 'down' —— 它会删除容器与网络，与项目的"不删除"原则冲突。
+# Stop only; containers are kept.
+# There is deliberately no 'down' target: it removes containers and the
+# network, which conflicts with this project's "never delete" rule.
 world-stop:
 	docker compose stop
 	@echo "world stopped. containers kept; resume with: docker compose start"
@@ -63,7 +64,7 @@ world-stop:
 world-logs:
 	docker compose logs -f --no-log-prefix
 
-# 冒烟测试：验证链路 / trace 传递 / 指标端点
+# Smoke test: verifies the chain / trace propagation / metrics endpoints
 smoke:
 	uv run python scripts/smoke_world.py
 

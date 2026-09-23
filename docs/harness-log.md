@@ -131,15 +131,24 @@ Windows PowerShell 5.1 把 **UTF-8 无 BOM** 的文件按系统 ANSI（GBK）读
 |---|---|
 | 可执行脚本纯 ASCII | ✅ 已有（#2 建立） |
 | **禁止用 PowerShell 读写文本文件，一律用 read/write/edit 工具** | ✅ 已写进 `AGENTS.md` 第 1 条 |
-| **自动化检查**：CI 中断言所有 `*.ps1` / `Makefile` 为纯 ASCII | ⬜ **仍未实现** |
+| **自动化检查**：断言所有 `*.ps1` / `Makefile` 为纯 ASCII | ✅ **已实现**（`tests/test_offline.py::test_regression_3_*`） |
+
+### 回归用例
+
+- `tests/test_offline.py::test_regression_3_scripts_must_be_pure_ascii`
+- `tests/test_offline.py::test_regression_3_the_check_actually_scans_something`（元测试，防"扫了 0 个文件"的假绿）
 
 ### 状态
 
 - [x] 有纪律
-- [ ] **无自动化检查** ← 所以本条目仍记为未封堵
+- [x] **自动化检查已落地**
+- [x] **已证明能变红** —— 首次运行时**立刻抓到一处真实违规**：`Makefile` 里有 4 行中文注释（是我半小时前加 `world-up` 目标时写的，我自己违反了刚立的规则）
 
-> **这条的价值在于它证明了纪律不够**：#3 之所以零损失，是因为当时**有人在盯**。
-> 纪律依赖注意力，而注意力会疲劳；只有自动化检查不依赖。
+> **这条的价值在于它证明了纪律不够**：#3 发生时零损失，是因为当时**有人在盯**。
+> 纪律依赖注意力，而注意力会疲劳。
+>
+> 更强的证据来自这条测试自己：**写规则的人半小时后就违反了规则**，
+> 而测试第一次运行就抓住了。**只有自动化检查不依赖注意力。**
 
 ---
 
@@ -188,12 +197,18 @@ return resp.json()                  # ← 409 于是被当成成功返回
 
 ### 回归用例
 
-- [ ] 断言：下游返回 4xx 时，上游不得返回 2xx（D3 加入）
+- `tests/test_offline.py::test_regression_4_downstream_4xx_is_rejected_not_success`
+- `tests/test_offline.py::test_regression_4_4xx_must_not_retry`
+- `tests/test_offline.py::test_regression_4_5xx_does_retry_then_fails`（对照）
+- `tests/test_offline.py::test_regression_4_success_path_returns_payload`（正向对照，防"永远抛异常"的假绿）
+- `tests/test_world.py::test_f2_does_exhaust_pool_and_show_503`（端到端：4xx 语义在真实链路上成立）
 
 ### 状态
 
-- [x] 已修（提交见 D2）
-- [ ] 回归用例
+- [x] 已修
+- [x] 回归用例已落地
+- [x] **已证明能变红** —— 做了变异测试：把 `400 <= code < 500` 改成永假（模拟旧缺陷），
+      用例立刻报 `DID NOT RAISE DownstreamRejected`；还原后确认与提交版本逐字节一致
 
 ---
 
@@ -226,10 +241,22 @@ return resp.json()                  # ← 409 于是被当成成功返回
 | 初始化改为**覆盖写**（去掉 `nx=True`） | 库存是**夹具数据**，重启后必须是确定值；否则打空之后重启仍是空的，场景无法复现 |
 | 修掉 #4 的静默吞错 | 让此类失败**可见** |
 
+### 回归用例
+
+- `tests/test_world.py::test_regression_5_stock_is_not_drained`
+  （断言：连续 60 个请求全部 2xx；库存精确扣减；跑完仍剩 >1000）
+- `tests/test_world.py::test_injection_actually_takes_effect`
+  （**元测试**：先证明注入真的改变行为，否则"F1 不失败"可能只是注入没生效的假绿）
+
 ### 状态
 
 - [x] 已修
-- [ ] 回归用例：断言基线场景的 `/metrics` 中 `5xx=0` 且 `库存扣减数 = 请求数`
+- [x] 回归用例已落地
+- [x] 已验证通过（集成用例 38 秒跑完）
+
+> **本条第 5 项修复（初始化改覆盖写）的可复现意义**：
+> 库存是**夹具数据**，重启后必须是确定值。若改回"仅在键不存在时写"，
+> 压测打空后重启仍是空的，整个场景无法复现 —— 回归用例会抓到这一点。
 
 ---
 
