@@ -1,0 +1,125 @@
+# 被诊断系统：一条命令起全栈
+#
+#   docker compose up -d --build     启动
+#   docker compose ps                看状态
+#   docker compose logs -f order     看某个服务的日志
+#
+# 端口映射（本机 → 容器）：
+#   order      8080  ← 唯一对外业务入口
+#   inventory  8081
+#   payment    8082
+#   redis      6379
+#
+# ⚠️ 所有 W_* 环境变量都是"可调参数"。D2 的故障注入就是改这些值，
+#    不需要改任何代码，也不需要重建镜像。
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rca-world-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    networks: [rca]
+
+  payment:
+    build:
+      context: .
+      dockerfile: world/Dockerfile
+    container_name: rca-world-payment
+    command: ["python", "-m", "uvicorn", "world.payment.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      W_PORT: "8000"
+      W_REDIS_URL: "redis://redis:6379/0"
+      W_LOG_LEVEL: "INFO"
+      # 连接池：故意配小，让"池耗尽"这类故障在压测下能真实发生
+      W_POOL_SIZE: "4"
+      W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
+      W_POOL_WARN_MS: "150"
+      # 模拟外部风控：0ms 表示正常。D2 会把它调大来复现"下游超时"
+      W_PAYMENT_RISK_LATENCY_MS: "30"
+      W_PAYMENT_RISK_ERROR_RATE: "0"
+    ports:
+      - "8082:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rca]
+
+  inventory:
+    build:
+      context: .
+      dockerfile: world/Dockerfile
+    container_name: rca-world-inventory
+    command: ["python", "-m", "uvicorn", "world.inventory.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      W_PORT: "8000"
+      W_REDIS_URL: "redis://redis:6379/0"
+      W_LOG_LEVEL: "INFO"
+      W_POOL_SIZE: "4"
+      W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
+      W_POOL_WARN_MS: "150"
+      # 下游 = payment
+      W_INVENTORY_DOWNSTREAM_NAME: "payment"
+      W_INVENTORY_DOWNSTREAM_URL: "http://payment:8000"
+      # ★ "配置漂移"故障位：重试次数远超合理值会把 payment 打爆
+      W_INVENTORY_DOWNSTREAM_RETRIES: "1"
+      W_INVENTORY_DOWNSTREAM_TIMEOUT_MS: "3000"
+      W_INVENTORY_DOWNSTREAM_RETRY_BACKOFF_MS: "100"
+    ports:
+      - "8081:8000"
+    depends_on:
+      payment:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rca]
+
+  order:
+    build:
+      context: .
+      dockerfile: world/Dockerfile
+    container_name: rca-world-order
+    command: ["python", "-m", "uvicorn", "world.order.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      W_PORT: "8000"
+      W_REDIS_URL: "redis://redis:6379/0"
+      W_LOG_LEVEL: "INFO"
+      # ★ 这是"连接池耗尽"最容易发生的地方：它持有连接去调下游
+      W_POOL_SIZE: "2"
+      W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
+      W_POOL_WARN_MS: "150"
+      # 下游 = inventory
+      W_ORDER_DOWNSTREAM_NAME: "inventory"
+      W_ORDER_DOWNSTREAM_URL: "http://inventory:8000"
+      W_ORDER_DOWNSTREAM_RETRIES: "1"
+      W_ORDER_DOWNSTREAM_TIMEOUT_MS: "3000"
+      W_ORDER_DOWNSTREAM_RETRY_BACKOFF_MS: "100"
+    ports:
+      - "8080:8000"
+    depends_on:
+      inventory:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rca]
+
+networks:
+  rca:
+    name: rca-world

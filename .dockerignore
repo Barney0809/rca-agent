@@ -1,0 +1,46 @@
+# 构建上下文排除清单 —— 让镜像构建更快、更小
+#
+# 注意：world/ 必须保留（Dockerfile 需要它），不要写进来。
+
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Python 虚拟环境（容器里会重新装，不需要传进去）
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+.uv/
+uv.lock
+
+# 运行产物
+runs/
+recordings/
+quarantine/
+logs/
+*.log
+*.ndjson
+
+# Agent 侧代码与文档（被诊断系统不需要它们）
+src/
+eval/
+samples/
+web/
+docs/
+tests/
+scripts/
+Makefile
+AGENTS.md
+README.md
+*.md
+.env
+.env.*
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
