@@ -95,15 +95,26 @@ cp .env.example .env          # 填入 DEEPSEEK_API_KEY
 
 ## 状态
 
+**D0 已完成（2026-09-24）**
+
 - [x] 需求分析
 - [x] 技术选型与排期
-- [x] 事件流协议冻结
-- [x] 环境验证（Python 3.14 兼容性全通过）
-- [ ] 被诊断系统（world）
-- [ ] 策略执行点
-- [ ] 多 Agent 编排
-- [ ] 评测 harness
-- [ ] 单 Agent baseline 对照
+- [x] 事件流协议冻结（v1）
+- [x] 环境验证：Python 3.14 下全部依赖有 cp314 wheel，**零本地编译**
+- [x] 错误封堵清单建立（含 2 条真实条目）
+- [x] **D0 spike：DeepSeek 工具调用 + thinking 行为实测**
+  - 确认 `thinking` 默认开启且真实计费（推理 token 占输出 15%–26%）
+  - 确认关闭方式只有 `extra_body={"thinking":{"type":"disabled"}}` 有效
+  - **证伪**了「多轮 tools 必须回传 `reasoning_content`」这条约束
+  - 验证响应可录制（`recordings/`，为离线回放打底）
+
+**后续**
+
+- [ ] D1 被诊断系统（world）
+- [ ] D4 策略执行点
+- [ ] D6–D7 多 Agent 编排
+- [ ] D5 单 Agent baseline 对照
+- [ ] D10 评测 harness
 
 ---
 
