@@ -1,0 +1,508 @@
+"""
+故障注入驱动 —— 施加六种故障、记录场景、产出可复现的数据。
+
+============================ 用法 ============================
+
+    python scripts/inject_fault.py list                 # 列出六种故障
+    python scripts/inject_fault.py status               # 看三个服务当前参数
+    python scripts/inject_fault.py baseline             # 无故障跑一轮（对照）
+    python scripts/inject_fault.py scenario F2          # 施加 F2 跑一个完整场景
+    python scripts/inject_fault.py apply F2             # 只施加，不跑流量（手工排查用）
+    python scripts/inject_fault.py revert F2            # 撤销
+    python scripts/inject_fault.py revert-all           # 把全部参数恢复默认
+
+============================ 一个重要的设计：机械动作 vs 语义动作 ============================
+
+每种故障有两组东西：
+
+  patches —— **机械动作**：实际要改哪些服务的哪些参数。
+             这是"为了让故障发生"必须做的事。
+
+  changes —— **语义动作**：哪些改动**在现实世界里会留下变更记录**。
+             这些才会写进变更事件日志，供 Agent 的"变更"数据源读取。
+
+两者**故意不相等**。以 F2 为例：
+
+  patches 要改两个地方：
+      order.pool_limit      = 2    ← 配置变更（现实里会留痕）
+      payment.risk_latency  = 800  ← 外部依赖劣化（现实里**不会**留痕）
+
+  changes 只记一条：
+      W_ORDER_POOL_SIZE: 8 → 2
+
+于是 Agent 的变更数据源里**恰好只有 order 池被改小这一条** ——
+它看起来完全像是根因，其实是**红鲱鱼**。真根因（payment 的外部依赖变慢）
+在变更日志里根本没有记录，只能从指标里看出来。
+
+**这就是"有变更 ≠ 是它"的设计**，也是 F2 必须靠交叉举证才能答对的原因。
+
+============================ 产出 ============================
+
+    runs/<run_id>/scenario.json     完整场景记录（含标准答案，供对账）
+    runs/<run_id>/changes.ndjson    变更事件日志（**Agent 唯一能读到的变更来源**）
+
+⚠️ `runs/` 已在 .gitignore 中：故障定义是代码（入库），运行数据是数据（不入库）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+import httpx  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from world.loadgen.main import run_load  # noqa: E402
+
+SERVICES = {
+    "order": "http://127.0.0.1:8080",
+    "inventory": "http://127.0.0.1:8081",
+    "payment": "http://127.0.0.1:8082",
+}
+RUNS_DIR = ROOT / "runs"
+
+
+# ================================================================
+# 六种故障的定义（与 docs/04-故障目录.md 一一对应）
+# ================================================================
+
+@dataclass(frozen=True)
+class Fault:
+    id: str
+    name: str
+    patches: dict[str, dict]          # 机械动作：服务 -> 参数补丁
+    changes: tuple[dict, ...]         # 语义动作：记入变更日志的条目
+    symptom_at: str                   # 症状出现在哪个服务
+    root_at: str                      # 根因在哪个服务
+    cross_service: bool               # 症状与根因是否跨服务
+    ground_truth: str                 # 标准答案
+    expect: tuple[str, ...] = ()      # 期望在日志里看到的关键词（供人工核对）
+
+
+FAULTS: dict[str, Fault] = {
+    f.id: f
+    for f in [
+        Fault(
+            id="F1",
+            name="外部依赖变慢",
+            patches={"payment": {"risk_latency_ms": 800}},
+            changes=(),
+            symptom_at="order", root_at="payment", cross_service=True,
+            ground_truth="payment 的外部风控依赖延迟升高（≥800ms）",
+            expect=("外部风控响应缓慢",),
+        ),
+        Fault(
+            id="F2",
+            name="连接池耗尽（被下游变慢放大）",
+            patches={
+                "order": {"pool_limit": 2, "pool_acquire_timeout_ms": 400},
+                "payment": {"risk_latency_ms": 800},
+            },
+            # ⚠️ 只记池大小这一条 —— payment 的延迟劣化不是"配置变更"
+            changes=({"target": "order", "key": "W_ORDER_POOL_SIZE"},),
+            symptom_at="order", root_at="payment", cross_service=True,
+            ground_truth="外部风控延迟升高；order 池耗尽是被放大的症状，不是根因",
+            expect=("连接池等待", "连接池获取超时", "外部风控响应缓慢"),
+        ),
+        Fault(
+            id="F3",
+            name="本环节处理变慢",
+            patches={"inventory": {"slow_op_ms": 600}},
+            changes=(),
+            symptom_at="order", root_at="inventory", cross_service=True,
+            ground_truth="inventory 本环节处理变慢（其下游 payment 耗时正常）",
+            expect=("库存预留成功",),
+        ),
+        Fault(
+            id="F4",
+            name="重试风暴（配置漂移）",
+            # ⚠️ 重试只在【调用失败】时才发生。
+            #    所以 F4 必须同时让 payment 失败 —— 否则重试 5 次和 1 次毫无区别
+            #    （这是第一版设计漏掉的地方，实测 5xx=0、完全没有效果）。
+            patches={
+                "payment": {"risk_error_rate": 0.6},
+                "inventory": {"downstream_retries": 5},
+            },
+            # 只记重试次数这一条：payment 的错误率上升是"外部依赖故障"，
+            # 在现实世界里不是一次配置变更，所以不进变更日志。
+            changes=({"target": "inventory", "key": "W_INVENTORY_DOWNSTREAM_RETRIES"},),
+            symptom_at="payment", root_at="inventory", cross_service=True,
+            ground_truth="inventory 的重试次数被从 1 改为 5，把失败流量放大 5 倍打给 payment",
+            expect=("调用下游 payment 第",),
+        ),
+        Fault(
+            id="F5",
+            name="外部依赖报错",
+            patches={"payment": {"risk_error_rate": 0.5}},
+            changes=(),
+            symptom_at="order", root_at="payment", cross_service=True,
+            ground_truth="外部风控的错误率升高（耗时正常，错误率飙升）",
+            expect=("外部风控调用失败",),
+        ),
+        Fault(
+            id="F6",
+            name="内存泄漏（对照组）",
+            patches={"order": {"leak_mb_per_req": 2}},
+            changes=(),
+            symptom_at="order", root_at="order", cross_service=False,
+            ground_truth="order 自身的内存泄漏（症状与根因同源，单 Agent 也能定位）",
+            expect=("下单成功",),
+        ),
+    ]
+}
+
+
+# ================================================================
+# 工具函数
+# ================================================================
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def read_knobs(client: httpx.Client) -> dict[str, dict]:
+    out = {}
+    for name, base in SERVICES.items():
+        try:
+            out[name] = client.get(f"{base}/_knobs", timeout=10.0).json()
+        except Exception as e:
+            out[name] = {"error": str(e)}
+    return out
+
+
+def count_log_lines() -> int | None:
+    """统计三个服务的日志总行数。
+
+    ⚠️ 这是【累计值】（自容器启动以来），所以场景的净增量 = 之后 - 之前。
+    没有别的进程在写日志时这个差值就是本场景的产出。
+    """
+    try:
+        proc = subprocess.run(
+            ["docker", "compose", "logs", "--no-log-prefix", "order", "inventory", "payment"],
+            cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120,
+        )
+        return len(proc.stdout.splitlines())
+    except Exception:
+        return None
+
+
+def apply_patches(client: httpx.Client, fault: Fault) -> dict[str, dict]:
+    """施加故障，返回每个服务实际发生变化的字段。
+
+    ⚠️ /_inject 端点**不会往服务日志写任何东西** —— 这是刻意的，
+       否则 Agent 只要 grep 一下就拿到答案了。
+    """
+    changed_by_service: dict[str, dict] = {}
+    for svc, patch in fault.patches.items():
+        try:
+            r = client.post(f"{SERVICES[svc]}/_inject", json=patch, timeout=10.0)
+            changed_by_service[svc] = r.json().get("changed", {})
+        except Exception as e:
+            changed_by_service[svc] = {"__error__": str(e)}
+    return changed_by_service
+
+
+def revert_patches(client: httpx.Client, fault: Fault) -> dict[str, dict]:
+    """撤销故障：把故障涉及的字段恢复成未注入时的值。
+
+    注意用的是"反向补丁"：把每个字段设回 0 / 默认值。
+    这里写死默认值是有意的 —— 参数不多，写死比引入一套状态管理更不容易出错。
+    """
+    DEFAULTS = {
+        "pool_limit": 64,          # 注意：inventory/payment 的默认是 4，见 compose
+        "pool_acquire_timeout_ms": 2000,
+        "slow_op_ms": 0,
+        "leak_mb_per_req": 0.0,
+        "risk_latency_ms": 30,
+        "risk_error_rate": 0.0,
+        "downstream_retries": 1,
+    }
+    # pool_limit 的默认值按服务区分（order=64, inventory/payment=4）
+    POOL_DEFAULT = {"order": 64, "inventory": 4, "payment": 4}
+
+    changed_by_service: dict[str, dict] = {}
+    for svc, patch in fault.patches.items():
+        revert = {}
+        for k in patch:
+            revert[k] = POOL_DEFAULT[svc] if k == "pool_limit" else DEFAULTS[k]
+        try:
+            r = client.post(f"{SERVICES[svc]}/_inject", json=revert, timeout=10.0)
+            changed_by_service[svc] = r.json().get("changed", {})
+        except Exception as e:
+            changed_by_service[svc] = {"__error__": str(e)}
+    return changed_by_service
+
+
+# ================================================================
+# 命令
+# ================================================================
+
+def cmd_list() -> int:
+    print("=" * 96)
+    print("  六种故障")
+    print("=" * 96)
+    print(f"  {'ID':<4} {'名称':<26} {'症状在':<10} {'根因在':<10} {'跨服务':<7} 记录变更")
+    print("  " + "-" * 92)
+    for f in FAULTS.values():
+        print(
+            f"  {f.id:<4} {f.name:<26} {f.symptom_at:<10} {f.root_at:<10} "
+            f"{'是' if f.cross_service else '否(对照)':<7} "
+            f"{'是' if f.changes else '否'}"
+        )
+    print()
+    print("  ⚠️ '记录变更'=是 的才会出现在 Agent 能看到的变更日志里。")
+    print("     F2 是红鲱鱼（看起来像根因，其实不是）；F4 是真根因。")
+    return 0
+
+
+def cmd_status() -> int:
+    with httpx.Client() as client:
+        knobs = read_knobs(client)
+    print("=" * 96)
+    print("  三个服务的当前参数")
+    print("=" * 96)
+    for name, k in knobs.items():
+        print(f"  {name:<10} {json.dumps(k, ensure_ascii=False)}")
+    return 0
+
+
+def cmd_apply(fault_id: str) -> int:
+    fault = FAULTS[fault_id]
+    with httpx.Client() as client:
+        changed = apply_patches(client, fault)
+    print(f"已施加 {fault.id} {fault.name}")
+    for svc, ch in changed.items():
+        print(f"  {svc}: {json.dumps(ch, ensure_ascii=False)}")
+    print()
+    print("  记住跑完要 revert，否则下一个场景会被污染。")
+    return 0
+
+
+def cmd_revert(fault_id: str) -> int:
+    fault = FAULTS[fault_id]
+    with httpx.Client() as client:
+        changed = revert_patches(client, fault)
+    print(f"已撤销 {fault.id}")
+    for svc, ch in changed.items():
+        print(f"  {svc}: {json.dumps(ch, ensure_ascii=False)}")
+    return 0
+
+
+def cmd_revert_all() -> int:
+    with httpx.Client() as client:
+        for fault in FAULTS.values():
+            revert_patches(client, fault)
+        knobs = read_knobs(client)
+    print("已把全部参数恢复默认：")
+    for name, k in knobs.items():
+        print(f"  {name:<10} {json.dumps(k, ensure_ascii=False)}")
+    return 0
+
+
+async def _run_scenario(
+    fault: Fault | None, concurrency: int, duration_s: float, max_requests: int
+) -> int:
+    run_id = f"r-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    started_at = now_iso()
+
+    label = f"{fault.id} {fault.name}" if fault else "baseline（无故障）"
+    print("=" * 96)
+    print(f"  场景 {run_id} —— {label}")
+    print("=" * 96)
+
+    with httpx.Client() as client:
+        # ---------- 1. 记录基线 ----------
+        print("\n[1/6] 读取基线")
+        logs_before = count_log_lines()
+        knobs_before = read_knobs(client)
+        print(f"      日志累计行数 {logs_before}")
+
+        # ---------- 2. 施加故障 ----------
+        print("\n[2/6] 施加故障")
+        changed = {}
+        if fault:
+            changed = apply_patches(client, fault)
+            for svc, ch in changed.items():
+                print(f"      {svc}: {json.dumps(ch, ensure_ascii=False)}")
+        else:
+            print("      （无故障）")
+
+        # ---------- 3. 写变更事件日志 ----------
+        # 这是 Agent 的第三路数据源。只有"真实世界会留痕"的改动才写进去。
+        print("\n[3/6] 写变更事件日志")
+        change_records = []
+        if fault:
+            for ch in fault.changes:
+                target = ch["target"]
+                key = ch["key"]
+                # 取"改动前"的真实值（从补丁结果里读，避免写死）
+                actual = changed.get(target, {}).get(_knob_of(key))
+                from_val = actual[0] if actual else None
+                to_val = actual[1] if actual else None
+                change_records.append({
+                    "ts": now_iso(),
+                    "target": target,
+                    "key": key,
+                    "from": str(from_val),
+                    "to": str(to_val),
+                    "by": "injector",
+                })
+        if change_records:
+            with (run_dir / "changes.ndjson").open("w", encoding="utf-8") as fh:
+                for rec in change_records:
+                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    print(f"      {json.dumps(rec, ensure_ascii=False)}")
+        else:
+            (run_dir / "changes.ndjson").write_text("", encoding="utf-8")
+            print("      （本故障在现实世界中不留变更记录）")
+
+        # ---------- 4. 打流量 ----------
+        # ⚠️ 用【请求数】控制数据量，而不是用时长。
+        #    实测发现：系统冷/热状态下 RPS 差 2–3 倍（91→276），
+        #    按固定时长跑出来的日志量不可复现。按请求数控制则稳定得多。
+        #    duration_s 这里只作为**安全上限**（防止故障导致极慢时卡死）。
+        print(f"\n[4/6] 打流量（{concurrency} 并发，目标 {max_requests} 个请求，"
+              f"上限 {duration_s:.0f} 秒）")
+        load = await run_load(
+            concurrency=concurrency,
+            duration_s=duration_s,
+            max_requests=max_requests,
+            verbose=False,
+        )
+        print(f"      请求 {load['total']}  成功 {load['ok']}  5xx {load['http_5xx']}  "
+              f"错误 {load['error']}  RPS {load['rps']}  平均延迟 {load['avg_latency_ms']}ms")
+
+        # ---------- 5. 撤销并收尾 ----------
+        print("\n[5/6] 撤销故障")
+        if fault:
+            revert_patches(client, fault)
+            print("      已恢复默认")
+        time.sleep(2)   # 等最后几行日志落盘
+        logs_after = count_log_lines()
+        knobs_after = read_knobs(client)
+
+    delta = None
+    if logs_before is not None and logs_after is not None:
+        delta = logs_after - logs_before
+
+    print(f"      日志累计行数 {logs_after}（本场景净增 {delta}）")
+
+    # ---------- 6. 写场景记录 ----------
+    print("\n[6/6] 写场景记录")
+    scenario = {
+        "run_id": run_id,
+        "fault_id": fault.id if fault else None,
+        "name": fault.name if fault else "baseline",
+        "started_at": started_at,
+        "finished_at": now_iso(),
+        "patches": fault.patches if fault else {},
+        "changes": change_records,
+        "symptom_at": fault.symptom_at if fault else None,
+        "root_at": fault.root_at if fault else None,
+        "cross_service": fault.cross_service if fault else None,
+        "ground_truth": fault.ground_truth if fault else None,
+        "expect_log_keywords": list(fault.expect) if fault else [],
+        "load": load,
+        "log_lines": delta,
+        "knobs_before": knobs_before,
+        "knobs_after": knobs_after,
+    }
+    (run_dir / "scenario.json").write_text(
+        json.dumps(scenario, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"      {run_dir.relative_to(ROOT)}\\scenario.json")
+    print(f"      {run_dir.relative_to(ROOT)}\\changes.ndjson")
+
+    # ---------- 报告 ----------
+    print()
+    print("=" * 96)
+    print("  场景结论")
+    print("=" * 96)
+    print(f"  症状出现在   {scenario['symptom_at']}")
+    print(f"  根因在       {scenario['root_at']}")
+    print(f"  跨服务       {'是' if scenario['cross_service'] else '否（对照组）'}")
+    print(f"  标准答案     {scenario['ground_truth']}")
+    print(f"  日志行数     {delta}  "
+          f"{'✅ 达标（≥3 万）' if (delta or 0) >= 30000 else '⚠️ 未达 3 万，需调时长/并发'}")
+    if fault and fault.expect:
+        print()
+        print("  人工核对：下面这条命令应该能搜到故障证据")
+        kw = fault.expect[0]
+        print(f"    docker compose logs --no-log-prefix order inventory payment | Select-String '{kw}'")
+    print()
+    return 0
+
+
+def _knob_of(env_key: str) -> str:
+    """把环境变量名映射成 Knobs 字段名。"""
+    mapping = {
+        "W_ORDER_POOL_SIZE": "pool_limit",
+        "W_INVENTORY_DOWNSTREAM_RETRIES": "downstream_retries",
+    }
+    return mapping.get(env_key, env_key.lower())
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="故障注入驱动")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="列出六种故障")
+    sub.add_parser("status", help="看三个服务当前参数")
+    sub.add_parser("revert-all", help="全部恢复默认")
+
+    p_scen = sub.add_parser("scenario", help="跑一个完整场景")
+    p_scen.add_argument("fault_id", nargs="?", default=None, help="F1..F6；省略则跑 baseline")
+    p_scen.add_argument("--concurrency", type=int, default=50)
+    # 默认按【请求数】控制数据量（可复现），duration 只作安全上限。
+    # 实测每请求约 5 行日志，8000 个请求约产 4 万行，落在目标区间 3–8 万内。
+    p_scen.add_argument("--max-requests", type=int, default=8000)
+    p_scen.add_argument("--duration", type=float, default=180.0,
+                        help="安全上限（秒）；故障导致极慢时兜底")
+
+    p_apply = sub.add_parser("apply", help="只施加故障")
+    p_apply.add_argument("fault_id")
+    p_revert = sub.add_parser("revert", help="撤销故障")
+    p_revert.add_argument("fault_id")
+
+    args = parser.parse_args()
+
+    if args.cmd == "list":
+        return cmd_list()
+    if args.cmd == "status":
+        return cmd_status()
+    if args.cmd == "revert-all":
+        return cmd_revert_all()
+    if args.cmd == "apply":
+        return cmd_apply(args.fault_id)
+    if args.cmd == "revert":
+        return cmd_revert(args.fault_id)
+    if args.cmd == "scenario":
+        fault = FAULTS[args.fault_id] if args.fault_id else None
+        if args.fault_id and args.fault_id not in FAULTS:
+            print(f"未知故障 {args.fault_id}，用 list 看可选项")
+            return 2
+        return asyncio.run(
+            _run_scenario(fault, args.concurrency, args.duration, args.max_requests)
+        )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

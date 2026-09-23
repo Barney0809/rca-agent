@@ -22,7 +22,11 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from world.common.config import PoolExhausted, RedisPool, knobs_from, load_settings
-from world.common.downstream import DownstreamFailed, call_downstream
+from world.common.downstream import (
+    DownstreamFailed,
+    DownstreamRejected,
+    call_downstream,
+)
 from world.common.obs import (
     TRACE_HEADER,
     Metrics,
@@ -48,7 +52,14 @@ metrics.describe("handler_duration_ms", "本服务处理一次请求的耗时（
 metrics.describe("stock_level", "当前库存量")
 
 SEED_SKUS = ["SKU-001", "SKU-002", "SKU-003"]
-DEFAULT_STOCK = 1000
+
+# 种子库存：刻意给得很大。
+#
+# ⚠️ 踩过的坑：原来是 1000，被压测几轮就打空了。
+#    库存一空，请求就不再往下游走 —— 于是 payment 收不到请求、日志断流、
+#    响应变成 15ms。现象看起来像"故障注入没生效"，实际是库存耗尽的干扰，
+#    排查花了不少时间。见 docs/harness-log.md。
+DEFAULT_STOCK = 1_000_000
 
 
 @asynccontextmanager
@@ -56,11 +67,13 @@ async def lifespan(app: FastAPI):
     app.state.pool = RedisPool(settings, log, knobs)
     app.state.http = httpx.AsyncClient()
 
-    # 初始化库存：只在键不存在时写入，重启不会把库存重置掉。
-    # nx=True 就是 Redis 的"仅当键不存在才设置"。
+    # 初始化库存。
+    # ⚠️ 这里刻意【覆盖】写，而不是"仅当键不存在才写"（即不加 nx=True）：
+    #    库存是**夹具数据**，重启后应当是确定值。
+    #    如果只在不存在时写，那么压测打空之后重启仍然是空的，场景无法复现。
     async with app.state.pool.acquire("-") as r:
         for sku in SEED_SKUS:
-            await r.set(f"stock:{sku}", DEFAULT_STOCK, nx=True)
+            await r.set(f"stock:{sku}", DEFAULT_STOCK)
 
     log.info(
         f"服务启动 service={settings.service} port={settings.port} "
@@ -169,6 +182,14 @@ async def reserve(body: ReserveRequest, request: Request):
             extra={"trace": trace},
         )
         raise HTTPException(status_code=503, detail=f"服务繁忙：{exc}") from exc
+
+    except DownstreamRejected as exc:
+        metrics.inc("requests_total", endpoint="reserve", result="rejected")
+        log.error(
+            f"库存预留被下游拒绝 order_id={body.order_id} HTTP {exc.status_code}: {exc.detail}",
+            extra={"trace": trace},
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     except DownstreamFailed as exc:
         metrics.inc("requests_total", endpoint="reserve", result="downstream_failed")

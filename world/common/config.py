@@ -144,6 +144,7 @@ def knobs_from(settings: Settings) -> Knobs:
     """
     return Knobs(
         pool_limit=settings.pool_size,
+        pool_acquire_timeout_ms=settings.pool_acquire_timeout_ms,
         downstream_retries=settings.downstream_retries,
         risk_latency_ms=settings.risk_latency_ms,
         risk_error_rate=settings.risk_error_rate,
@@ -234,7 +235,9 @@ class RedisPool:
         try:
             try:
                 async with self._cond:
-                    deadline = started + s.pool_acquire_timeout_ms / 1000
+                    # 等待上限读自 Knobs 而非 settings：它也需要能在运行时调小，
+                    # 否则池很小时系统会被拖到跑不完（见 runtime.py 的说明）。
+                    deadline = started + self._knobs.pool_acquire_timeout_ms / 1000
                     # 容量满了就在这儿等；被 notify 唤醒后重新检查（防虚假唤醒）
                     while self._in_flight >= self.limit:
                         remaining = deadline - time.perf_counter()

@@ -45,6 +45,13 @@ class Knobs:
     # --- 连接池容量（F2）---
     pool_limit: int = 8
 
+    # --- 获取连接的等待上限（F2 的配套参数）---
+    # 为什么它也需要可注入：池很小时，吞吐 = 池容量 / 单次处理时长。
+    # 等待上限若高达 2000ms，整个系统会被拖到每分钟几个请求，
+    # 场景根本跑不完。把它调小（如 400ms）能让"快速失败"成为主路径，
+    # 从而在合理时间内产生足够的失败样本 —— 现实里短超时也是常见配置。
+    pool_acquire_timeout_ms: int = 2000
+
     # --- 本环节数据访问的额外延迟（F3）---
     slow_op_ms: int = 0
 
@@ -78,6 +85,7 @@ class Knobs:
         """当前全部参数（用于诊断与对账）。"""
         return {
             "pool_limit": self.pool_limit,
+            "pool_acquire_timeout_ms": self.pool_acquire_timeout_ms,
             "slow_op_ms": self.slow_op_ms,
             "leak_mb_per_req": self.leak_mb_per_req,
             "risk_latency_ms": self.risk_latency_ms,

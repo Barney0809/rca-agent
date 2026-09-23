@@ -47,8 +47,10 @@ services:
       W_PORT: "8000"
       W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
       W_LOG_LEVEL: "INFO"
-      # 连接池：故意配小，让"池耗尽"这类故障在压测下能真实发生
-      W_POOL_SIZE: "4"
+      # ⚠️ 必须足够大，理由同 order：持有连接跨网络调下游，
+      #    吞吐 ≈ 池容量 / 下游耗时。池太小时，F1（下游变慢）会在这里
+      #    也触发池耗尽，症状就混了。
+      W_POOL_SIZE: "64"
       W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
       W_POOL_WARN_MS: "150"
       # 模拟外部风控：0ms 表示正常。D2 会把它调大来复现"下游超时"
@@ -78,7 +80,8 @@ services:
       W_PORT: "8000"
       W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
       W_LOG_LEVEL: "INFO"
-      W_POOL_SIZE: "4"
+      # ⚠️ 必须足够大，理由同 order：持有连接跨网络调下游。
+      W_POOL_SIZE: "64"
       W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
       W_POOL_WARN_MS: "150"
       # 下游 = payment
@@ -111,10 +114,17 @@ services:
       W_PORT: "8000"
       W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
       W_LOG_LEVEL: "INFO"
-      # ★ 这是"连接池耗尽"最容易发生的地方：它持有连接去调下游
-      # 默认 8 是正常容量；F2 的场景由注入器把它改成 2 ——
-      # 这样"池被改小"才构成一条真实的配置变更事件（红鲱鱼）。
-      W_POOL_SIZE: "8"
+      # ★ 这是"连接池耗尽"最容易发生的地方：它持有连接去调下游。
+      #
+      # ⚠️ 默认必须是【足够大】的（64），不能是 8。
+      #    原因：本服务持有连接跨网络调下游，所以吞吐 ≈ 池容量 / 下游耗时。
+      #    压测 30 并发时，池=8 会让 F1（下游变慢）也顺带触发池耗尽，
+      #    于是 F1 与 F2 的症状混在一起，Agent 无法区分是哪一种。
+      #    调大之后：只有 F2（把池改成 2）才会耗尽 —— 症状才干净。
+      #
+      # F2 的场景由注入器把它改成 2，这样"池被改小"才构成一条真实的
+      # 配置变更事件（红鲱鱼）。
+      W_POOL_SIZE: "64"
       W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
       W_POOL_WARN_MS: "150"
       # 下游 = inventory

@@ -21,7 +21,11 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from world.common.config import PoolExhausted, RedisPool, knobs_from, load_settings
-from world.common.downstream import DownstreamFailed, call_downstream
+from world.common.downstream import (
+    DownstreamFailed,
+    DownstreamRejected,
+    call_downstream,
+)
 from world.common.obs import (
     TRACE_HEADER,
     Metrics,
@@ -176,6 +180,16 @@ async def create_order(body: OrderRequest, request: Request):
         metrics.inc("requests_total", endpoint="create_order", result="pool_exhausted")
         log.error(f"下单失败（连接池耗尽）order_id={order_id}: {exc}", extra={"trace": trace})
         raise HTTPException(status_code=503, detail=f"服务繁忙：{exc}") from exc
+
+    except DownstreamRejected as exc:
+        # 下游明确拒绝（如库存不足）→ 原样上抛它的状态码与原因。
+        # ⚠️ 绝不能再走"当成成功"那条路 —— 见 docs/harness-log.md。
+        metrics.inc("requests_total", endpoint="create_order", result="rejected")
+        log.error(
+            f"下单被下游拒绝 order_id={order_id} HTTP {exc.status_code}: {exc.detail}",
+            extra={"trace": trace},
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     except DownstreamFailed as exc:
         metrics.inc("requests_total", endpoint="create_order", result="downstream_failed")

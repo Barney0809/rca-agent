@@ -31,6 +31,25 @@ class DownstreamFailed(RuntimeError):
     """重试全部失败后抛出。"""
 
 
+class DownstreamRejected(RuntimeError):
+    """下游**明确拒绝**了这次请求（4xx）。
+
+    与 DownstreamFailed 的区别：
+      DownstreamFailed   —— 下游"没答上来"（5xx / 超时 / 连不上），值得重试
+      DownstreamRejected —— 下游"答了，但是拒绝"（4xx），重试没有意义
+
+    ⚠️ 为什么要单独一个类型：
+       这里曾经只把 >=500 当错误，于是 409（库存不足）被当成**成功**返回，
+       上游接着报出 CONFIRMED —— 明明失败了却报成功，是最危险的一类缺陷。
+       见 docs/harness-log.md。区分开之后，拒绝会被原样上抛。
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"downstream rejected with {status_code}: {detail}")
+        self.status_code = status_code
+        self.detail = detail
+
+
 async def call_downstream(
     *,
     client: httpx.AsyncClient,
@@ -70,6 +89,17 @@ async def call_downstream(
             elapsed_ms = (time.perf_counter() - started) * 1000
             metrics.observe("downstream_duration_ms", elapsed_ms, target=name)
 
+            # ---- 4xx：下游明确拒绝，不重试，但必须当失败上抛 ----
+            # ⚠️ 这里曾经写的是 `>= 500`，导致 409（库存不足）被当成成功返回，
+            #    上游于是报出 CONFIRMED —— 静默吞错，比报错危险得多。
+            if 400 <= resp.status_code < 500:
+                metrics.inc("downstream_calls_total", target=name, result="rejected")
+                log.warning(
+                    f"下游 {name} 拒绝了请求 HTTP {resp.status_code}：{resp.text[:200]}",
+                    extra={"trace": trace},
+                )
+                raise DownstreamRejected(resp.status_code, resp.text[:500])
+
             if resp.status_code >= 500:
                 raise DownstreamFailed(
                     f"{name} 返回 {resp.status_code}: {resp.text[:200]}"
@@ -77,6 +107,10 @@ async def call_downstream(
 
             metrics.inc("downstream_calls_total", target=name, result="ok")
             return resp.json()
+
+        except DownstreamRejected:
+            # 拒绝不是"重试能解决"的问题，直接上抛，不消耗重试次数
+            raise
 
         except Exception as exc:  # noqa: BLE001 —— 这里刻意兜住所有异常做统一重试
             last_error = exc
