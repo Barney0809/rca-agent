@@ -35,6 +35,7 @@ from world.common.downstream import (
     call_downstream,
 )
 from world.common.obs import Metrics, get_logger
+from rca.telemetry.parse import parse_log_line, template_of
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -210,3 +211,79 @@ def test_regression_3_the_check_actually_scans_something():
     # 门槛写 2 而不是 3：写死过高的数字会让"新增脚本还没加"变成假红。
     assert len(scripts) >= 2, f"只扫到 {len(scripts)} 个脚本：{names}"
     assert any(p.name == "Makefile" for p in scripts), "没扫到 Makefile，路径规则可能错了"
+
+
+# ================================================================
+# regression_#6：第三方库写的日志不能整类被漏掉
+# ================================================================
+
+def test_regression_6_third_party_log_lines_are_parsed():
+    """回归 #6 —— httpx 等第三方库写的日志**没有 `[service]` 段**。
+
+    历史：解析正则要求必须有 `[service]`，于是这类行整类被漏掉 ——
+    实测占全部日志的 **21%**，而且它承载关键证据（"下游 502 Bad Gateway"）。
+
+    这条用例盯住三种日志变体都能解析。
+    """
+    cases = [
+        # a) 我们自己写的：有 service、有 trace
+        (
+            "2026-09-24 03:52:19.348 INFO  [order] trace=abc123 | 收到下单请求",
+            "order",
+            "收到下单请求",
+        ),
+        # b) 我们自己写的：trace 为 -
+        (
+            "2026-09-24 03:52:19.348 INFO  [order] trace=- | 服务启动",
+            "order",
+            "服务启动",
+        ),
+        # c) ★ 第三方库写的：既没有 service 也没有 trace —— 就是这一条曾经被漏掉
+        (
+            '2026-09-24 04:59:22.064 INFO  HTTP Request: POST '
+            'http://inventory:8000/reserve "HTTP/1.1 502 Bad Gateway"',
+            "order",              # 没有 service 标记，应当回退到调用方传入的默认值
+            "502 Bad Gateway",
+        ),
+    ]
+
+    for raw, default_svc, expected_fragment in cases:
+        rec = parse_log_line(raw, default_service=default_svc)
+        assert rec is not None, f"这一行没能解析：{raw!r}"
+        assert rec.service == default_svc
+        assert expected_fragment in rec.message, f"消息体丢了内容：{rec.message!r}"
+
+
+def test_regression_6_unparsed_lines_are_counted_not_silently_dropped():
+    """配套：真正无法解析的行必须能被识别出来（好让上游统计，而不是静默丢）。"""
+    assert parse_log_line("这是一行完全不符合任何格式的垃圾", "order") is None
+    assert parse_log_line("", "order") is None
+    assert parse_log_line("   ", "order") is None
+
+
+# ================================================================
+# 降维的核心机制：模板归一化
+# ================================================================
+
+def test_template_normalization_groups_variable_parts():
+    """模板归一化是降维能成立的关键。
+
+    几万行日志之所以能收敛成几十个模板，是因为可变部分（数字、ID、耗时）
+    被替换成了占位符。如果这个机制坏了，每个不同的数值都会变成一个独立模板，
+    降维立刻失效（模板数会爆炸到与行数同量级）。
+    """
+    a = template_of("连接池等待 350ms（池大小=2，当前在途=2）")
+    b = template_of("连接池等待 812ms（池大小=8，当前在途=7）")
+    assert a == b, f"同一个事件的不同数值应当归一到同一模板：\n  {a}\n  {b}"
+
+    assert "<N>" in a, "数字应当被替换为占位符"
+
+    # 订单号（长十六进制串）应当被归一，而不是被数字规则切碎
+    c = template_of("下单失败 order_id=ORD-6E4BC1C290")
+    d = template_of("下单失败 order_id=ORD-1CDA2D0AEE")
+    assert c == d, f"订单号应当被归一：\n  {c}\n  {d}"
+    assert "ORD-<ID>" in c, f"订单号归一方式不对：{c}"
+
+    # 不同事件**不能**被错误合并
+    e = template_of("连接池获取超时：等待 400ms 后放弃")
+    assert e != a, "不同事件的模板不应相同"

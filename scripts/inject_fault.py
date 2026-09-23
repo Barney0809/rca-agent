@@ -201,6 +201,38 @@ def count_log_lines() -> int | None:
         return None
 
 
+def capture_logs(run_dir: Path, since_iso: str) -> dict[str, int]:
+    """把本场景窗口内的日志逐服务抓进 runs/<id>/logs/<svc>.log。
+
+    为什么要抓下来，而不是每次去问 docker：
+      `docker compose logs` 返回的是**自容器启动以来的累计日志** ——
+      跑的场景越多它越长，最后会慢到不可用；而且每次都要按时间窗再过滤一遍。
+      抓一份只含本窗口的，后续降维处理快且干净。
+
+    用 `--since <窗口开始时刻>` 限定范围。若某个 docker 版本不认这个参数，
+    兜底逻辑是：文件为空 → 采集层会自动回退到直接问 docker。
+    """
+    log_dir = run_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    counts: dict[str, int] = {}
+
+    for svc in ("order", "inventory", "payment"):
+        text = ""
+        try:
+            proc = subprocess.run(
+                ["docker", "compose", "logs", "--no-log-prefix", "--since", since_iso, svc],
+                cwd=str(ROOT), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=180,
+            )
+            text = proc.stdout
+        except Exception:
+            text = ""
+        (log_dir / f"{svc}.log").write_text(text, encoding="utf-8")
+        counts[svc] = len(text.splitlines())
+
+    return counts
+
+
 def apply_patches(client: httpx.Client, fault: Fault) -> dict[str, dict]:
     """施加故障，返回每个服务实际发生变化的字段。
 
@@ -390,12 +422,14 @@ async def _run_scenario(
               f"错误 {load['error']}  RPS {load['rps']}  平均延迟 {load['avg_latency_ms']}ms")
 
         # ---------- 5. 撤销并收尾 ----------
-        print("\n[5/6] 撤销故障")
+        print("\n[5/6] 撤销故障并抓取日志")
         if fault:
             revert_patches(client, fault)
             print("      已恢复默认")
         time.sleep(2)   # 等最后几行日志落盘
         logs_after = count_log_lines()
+        log_counts = capture_logs(run_dir, started_at)
+        print("      已抓取日志：" + "  ".join(f"{k}={v}行" for k, v in log_counts.items()))
         knobs_after = read_knobs(client)
 
     delta = None
@@ -421,6 +455,7 @@ async def _run_scenario(
         "expect_log_keywords": list(fault.expect) if fault else [],
         "load": load,
         "log_lines": delta,
+        "captured_log_lines": log_counts,
         "knobs_before": knobs_before,
         "knobs_after": knobs_after,
     }

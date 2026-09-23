@@ -55,8 +55,9 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 让 `from world.xxx import ...` 在测试里可用（项目根加入 sys.path）
-pythonpath = ["."]
+# 让 `import world.*` 与 `import rca.*` 在测试里都可用
+# （world = 被诊断系统，在根目录；rca = Agent，按 src 布局放在 src/ 下）
+pythonpath = ["src", "."]
 asyncio_mode = "auto"
 addopts = "-q"
 
