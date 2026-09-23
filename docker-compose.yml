@@ -8,15 +8,25 @@
 #   order      8080  ← 唯一对外业务入口
 #   inventory  8081
 #   payment    8082
-#   redis      6379
+#
+# Redis：**默认使用本机原生 Redis**，不以容器方式启动。
+#   容器通过 host.docker.internal 访问宿主机（Docker Desktop for Windows 提供）。
+#   密码从 .env 读取（.env 已被 .gitignore 忽略，密码不入库）。
+#   若想改用容器版 Redis，执行：
+#       docker compose --profile with-redis up -d
+#   并同时把下面的 W_REDIS_URL 改回 redis://:<密码>@redis:6379/0
 #
 # ⚠️ 所有 W_* 环境变量都是"可调参数"。D2 的故障注入就是改这些值，
 #    不需要改任何代码，也不需要重建镜像。
 
 services:
+  # 可选的容器版 Redis。
+  # 默认不启动（靠 profile 机制），因为本机已有原生 Redis 在 6379。
+  # 需要用容器版时：docker compose --profile with-redis up -d
   redis:
     image: redis:7-alpine
     container_name: rca-world-redis
+    profiles: ["with-redis"]
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "6379:6379"
@@ -35,7 +45,7 @@ services:
     command: ["python", "-m", "uvicorn", "world.payment.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       W_PORT: "8000"
-      W_REDIS_URL: "redis://redis:6379/0"
+      W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
       W_LOG_LEVEL: "INFO"
       # 连接池：故意配小，让"池耗尽"这类故障在压测下能真实发生
       W_POOL_SIZE: "4"
@@ -51,9 +61,6 @@ services:
       TZ: "Asia/Shanghai"
     ports:
       - "8082:8000"
-    depends_on:
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 5s
@@ -69,7 +76,7 @@ services:
     command: ["python", "-m", "uvicorn", "world.inventory.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       W_PORT: "8000"
-      W_REDIS_URL: "redis://redis:6379/0"
+      W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
       W_LOG_LEVEL: "INFO"
       W_POOL_SIZE: "4"
       W_POOL_ACQUIRE_TIMEOUT_MS: "2000"
@@ -102,7 +109,7 @@ services:
     command: ["python", "-m", "uvicorn", "world.order.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       W_PORT: "8000"
-      W_REDIS_URL: "redis://redis:6379/0"
+      W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
       W_LOG_LEVEL: "INFO"
       # ★ 这是"连接池耗尽"最容易发生的地方：它持有连接去调下游
       W_POOL_SIZE: "2"
