@@ -108,12 +108,24 @@ cp .env.example .env          # 填入 DEEPSEEK_API_KEY
   - **证伪**了「多轮 tools 必须回传 `reasoning_content`」这条约束
   - 验证响应可录制（`recordings/`，为离线回放打底）
 
+**D1 已完成（2026-09-24）—— 被诊断系统**
+
+- [x] 三个 FastAPI 服务构成线性依赖链 `order → inventory → payment → 外部风控`
+- [x] Redis 连接池（带等待时长测量，是"池耗尽"故障的第一手证据）
+- [x] trace id 经 HTTP 头显式透传，跨三个服务一致
+- [x] 文本日志（刻意非 JSON）+ Prometheus 文本指标端点
+- [x] `docker compose up -d --build` 一条命令起全栈
+- [x] 冒烟测试 `scripts/smoke_world.py` **18 项全通过**
+- [x] 容器时区统一为 `Asia/Shanghai`（避免时间轴错位）
+- [x] 默认使用本机原生 Redis（容器版降级为可选 profile）
+
 **后续**
 
-- [ ] D1 被诊断系统（world）
+- [ ] D2 六种故障注入 + 数据量做到 3–8 万行
+- [ ] D3 遥测接入与降维
 - [ ] D4 策略执行点
-- [ ] D6–D7 多 Agent 编排
 - [ ] D5 单 Agent baseline 对照
+- [ ] D6–D7 多 Agent 编排
 - [ ] D10 评测 harness
 
 ---
