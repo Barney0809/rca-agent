@@ -57,6 +57,24 @@
 - **中文路径下不要用 PowerShell 读写文本文件**，改用 `read` / `write` / `edit` 工具
 - 路径处理**全程按 UTF-8**；**禁止把路径交给 shell 做二次解析**（这是 #1 的直接成因）
 
+### 运行脚本必须显式指定解释器
+
+```powershell
+# 对
+.\.venv\Scripts\python.exe scripts\reduce_run.py
+uv run python scripts\reduce_run.py
+
+# 错 —— 它会用系统 Python，看不到项目依赖
+python scripts\reduce_run.py
+```
+
+**为什么这条要单列**（见 `docs/harness-log.md` P1）：
+用系统 Python 跑脚本**不会报错**，而是给出**一个错误的事实** ——
+例如对明明装好的包报 `ModuleNotFoundError`。
+那看起来像"环境坏了"，实际是"命令写错了"。
+
+`scripts/dev.ps1` 会交叉检查裸 `python` 指向哪里，不一致就提醒。
+
 ---
 
 ## 📖 第 2 条：用户背景与沟通要求

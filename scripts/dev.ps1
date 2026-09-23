@@ -34,9 +34,36 @@ Head "1. Python interpreter"
 $venvPy = Join-Path $root '.venv\Scripts\python.exe'
 if (Test-Path $venvPy) {
     $v = & $venvPy -c "import sys;print(sys.version.split()[0])"
-    Ok "venv python $v  ($venvPy)"
+    Ok "project venv: $venvPy  (python $v)"
 } else {
     Bad "no .venv found - run: uv sync"
+}
+
+# Cross-check what a bare `python` resolves to.
+#
+# WHY THIS CHECK EXISTS (see docs/harness-log.md P1):
+#   Running a script with the system `python` instead of the project venv
+#   does NOT fail loudly - it runs fine and reports a completely wrong fact,
+#   e.g. "ModuleNotFoundError: langgraph" for a package that IS installed.
+#   That looks like a broken environment when it is actually a broken command.
+#
+#   So: make the mismatch visible here, in the first lines of the self-check.
+if (Test-Path $venvPy) {
+    $venvPrefix = Split-Path -Parent (Split-Path -Parent $venvPy)
+    $bare = Get-Command python -ErrorAction SilentlyContinue
+    if ($bare) {
+        $barePrefix = (& python -c "import sys;print(sys.prefix)" 2>$null)
+        if ($barePrefix -and $barePrefix.Trim() -ne $venvPrefix) {
+            Warn "bare 'python' resolves to $($bare.Source)"
+            Warn "  its prefix is $barePrefix"
+            Warn "  that is NOT the project venv - results from it can be misleading"
+            Warn "  always use: .\.venv\Scripts\python.exe   or: uv run python"
+        } else {
+            Ok "bare 'python' points into the project venv"
+        }
+    } else {
+        Warn "bare 'python' not found on PATH"
+    }
 }
 
 Head "2. Dependency importability (the real compatibility test)"
