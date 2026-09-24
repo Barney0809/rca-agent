@@ -227,5 +227,31 @@
         ]
       }
     ]
+  },
+  "two_axis_cause_scoring": {
+    "why": "F8 exposed a third outcome that a single keyword judgement cannot express: 'a specialist FOUND it, but the adjudication demoted it'. Scoring that as correct reproduces #21's false positive; scoring it as a plain miss conflates it with baseline's 'never found it at all'. The fix splits the judgement into a verdict axis (did the final answer assert it) and a recall axis (did any component find it).",
+    "tests": ["tests/test_eval.py"],
+    "mutations": [
+      {
+        "id": "axes-a-recall-ignores-specialist-claims",
+        "desc": "Make the recall axis look only at the final answer, ignoring the specialists' claims. Then multi's only real advantage -- the division of labour covering the second fault -- becomes invisible, and the two systems look identical.",
+        "file": "eval/runner.py",
+        "find": "    recall = {\n        c.name: any(c.asserted(t) for t in texts) for c in sc.required_causes\n    }",
+        "replace": "    recall = dict(verdict)",
+        "expect_red": [
+          "tests/test_eval.py::test_f8_recall_axis_sees_the_claim_a_specialist_raised"
+        ]
+      },
+      {
+        "id": "axes-b-no-clause-awareness-for-causes",
+        "desc": "Score a required cause by plain substring matching, ignoring dismissal context. The demoted leak in the F8 verdict then counts as asserted -- the #21 false positive, reintroduced through the new two-axis path.",
+        "file": "eval/scenarios.py",
+        "find": "    def asserted(self, text: str) -> bool:\n        \"\"\"这段话有没有主张这个原因（所有组都要被主张）。\"\"\"\n        return all(_asserted_flags(text, self.keyword_groups))",
+        "replace": "    def asserted(self, text: str) -> bool:\n        \"\"\"这段话有没有主张这个原因（所有组都要被主张）。\"\"\"\n        return all(_asserted_flags(text, self.keyword_groups, dismissal_aware=False))",
+        "expect_red": [
+          "tests/test_eval.py::test_f8_verdict_axis_separates_the_two_causes"
+        ]
+      }
+    ]
   }
 }

@@ -98,6 +98,66 @@ DISMISSAL_MARKERS: tuple[str, ...] = (
 _CLAUSE_SPLIT = re.compile(r"[。！？；;，,\n]")
 
 
+def _group_asserted(
+    text: str, group: tuple[str, ...], *, dismissal_aware: bool = True
+) -> bool:
+    """这一组关键词有没有**被主张**（而不是被否掉）。
+
+    ⚠️ 这是全仓库唯一一份"小句 + 否定语境"判定的实现。
+       `ScenarioScore.judge` 与 `asserted_causes` 都调它 ——
+       刻意不复制第二份：复制出来的第二份迟早会和第一份走散，
+       而那种"两份判定不一致"的 bug 极难发现。
+    """
+    if not dismissal_aware:
+        low = text.lower()
+        return any(kw.lower() in low for kw in group)
+
+    for clause in _CLAUSE_SPLIT.split(text):
+        if not clause.strip():
+            continue
+        low_clause = clause.lower()
+        if not any(kw.lower() in low_clause for kw in group):
+            continue
+        if any(m in clause for m in DISMISSAL_MARKERS):
+            continue
+        return True
+    return False
+
+
+def _asserted_flags(
+    text: str, groups: tuple[tuple[str, ...], ...], *, dismissal_aware: bool = True
+) -> list[bool]:
+    return [
+        _group_asserted(text, g, dismissal_aware=dismissal_aware) for g in groups
+    ]
+
+
+@dataclass(frozen=True)
+class Cause:
+    """一个"必须被找到的原因"。
+
+    多故障场景（F8）用它把判据**拆成一项一项**，
+    这样才能分别回答两个不同的问题（见 runner 里的两轴报告）：
+
+        **召回**：这次尝试里，有没有**任何环节**找到它？
+        **结论**：最终答案有没有**主张**它？
+
+    单故障场景不需要它（只有一个原因，"召回"与"结论"必然相同）。
+    """
+
+    name: str
+    keyword_groups: tuple[tuple[str, ...], ...]
+
+    def asserted(self, text: str) -> bool:
+        """这段话有没有主张这个原因（所有组都要被主张）。"""
+        return all(_asserted_flags(text, self.keyword_groups))
+
+
+def asserted_causes(text: str, causes: tuple[Cause, ...]) -> dict[str, bool]:
+    """逐个原因判断"这句话有没有主张它"。"""
+    return {c.name: c.asserted(text) for c in causes}
+
+
 @dataclass(frozen=True)
 class ScenarioScore:
     """一个场景的评分规则。"""
@@ -110,6 +170,9 @@ class ScenarioScore:
     common_wrong: tuple[str, ...] = field(default=())
     # ⚠️ 非空表示**这个场景已作废，不得参与聚合**（harness-log #20）
     invalidated_reason: str = ""
+    # 多故障场景：**必须同时找到**的原因清单（空 = 单原因场景）
+    # 见 `Cause` 的注释与 runner 里的"两轴报告"
+    required_causes: tuple[Cause, ...] = ()
 
     def judge(self, text: str, *, dismissal_aware: bool = True) -> tuple[bool, list[bool]]:
         """返回 (是否答对, 每组的命中情况)。
@@ -125,21 +188,7 @@ class ScenarioScore:
             hits = [any(kw.lower() in low for kw in group) for group in self.keyword_groups]
             return all(hits), hits
 
-        clauses = [c for c in _CLAUSE_SPLIT.split(text) if c.strip()]
-
-        hits = []
-        for group in self.keyword_groups:
-            found = False
-            for clause in clauses:
-                low_clause = clause.lower()
-                if not any(kw.lower() in low_clause for kw in group):
-                    continue
-                # 关键词在场的这一小句，是在否掉这个原因吗？
-                if any(m in clause for m in DISMISSAL_MARKERS):
-                    continue
-                found = True
-                break
-            hits.append(found)
+        hits = _asserted_flags(text, self.keyword_groups)
         return all(hits), hits
 
     def explain(self, text: str) -> str:
@@ -299,6 +348,26 @@ SCENARIOS: dict[str, ScenarioScore] = {
                 "只答出外部风控变慢（漏了内存泄漏）",
                 "只答出内存泄漏（漏了外部风控变慢）",
                 "把两者当成同一个原因",
+            ),
+            # ★ 两个原因**各自**成一项，好让"召回"与"结论"分开算。
+            #
+            # 为什么必须分开：F8 上真实发生的是
+            #   「metrics 专员**找到了**泄漏，但被交叉质证说服改口、被裁决降级」——
+            # 这是第三种结局："找到了，但没当成根因"。
+            # 单一的关键词组判定**表达不了它**：要么算对（看到词就通过），
+            # 要么算错（被否掉就不通过），而这两种都不对。
+            required_causes=(
+                Cause(
+                    name="外部风控变慢",
+                    keyword_groups=(
+                        ("风控", "外部依赖", "第三方", "risk"),
+                        ("慢", "延迟", "变慢", "响应慢", "耗时升"),
+                    ),
+                ),
+                Cause(
+                    name="内存泄漏",
+                    keyword_groups=(("内存", "memory", "泄漏", "leak"),),
+                ),
             ),
         ),
     ]

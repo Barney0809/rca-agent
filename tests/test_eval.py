@@ -682,3 +682,121 @@ def test_regression_21_the_phrasing_samples_are_actually_diverse():
         f"措辞样本的尾部只有 {len(tails)} 种 —— 太同质了，"
         "覆盖不到真实世界里措辞的多样性（#21 就是这么漏的）"
     )
+
+
+# ================================================================
+# F8 两轴判定：把"找到了但没当成根因"表达出来
+# ================================================================
+#
+# F8 上真实发生的是第三种结局：
+#     metrics 专员**找到了**内存泄漏 → 交叉质证说服它改口 → 裁决把它降级成"伴随现象"
+#
+# 单一的关键词组判定表达不了它：看到词就算对（假阳性，见 #21），
+# 被否掉就算错（那就和 baseline 的"从没找到"混为一谈）。**两种都不对。**
+#
+# 所以拆成两轴：
+#     结论轴 = 最终答案有没有主张它（**同口径**，可以拿来比高低）
+#     召回轴 = 这次尝试里任何环节有没有找到它（**不同口径**，回答"分工有没有覆盖到"）
+
+
+# F8 裁决的真实措辞（来自 multi-20260925-072846）
+F8_VERDICT_DISMISSES_LEAK = (
+    "payment 所依赖的外部风控服务响应变慢（约 800ms/次），导致 payment 扣款耗时被拉长；"
+    "order 的 4.22e+09 字节内存泄漏在本窗口内无功能/资源影响，是被放大的脆弱点而非触发者。"
+)
+
+
+def test_f8_verdict_axis_separates_the_two_causes():
+    """结论轴：风控变慢被主张，内存泄漏被降级 —— 必须一真一假。"""
+    from eval.scenarios import SCENARIOS, asserted_causes
+
+    sc = SCENARIOS["F8"]
+    axes = asserted_causes(F8_VERDICT_DISMISSES_LEAK, sc.required_causes)
+
+    assert axes["外部风控变慢"] is True
+    assert axes["内存泄漏"] is False, (
+        "这段裁决把泄漏明确降级成了「伴随现象」，结论轴必须是 False"
+    )
+
+
+def test_f8_recall_axis_sees_the_claim_a_specialist_raised():
+    """召回轴的核心：**专员提过就算找到**，哪怕最终裁决把它否掉了。
+
+    这正是 F8 上 multi 相对 baseline 的**唯一**差别。
+    """
+    from eval.runner import Attempt, attempt_cause_axes
+
+    attempt = Attempt(
+        fault_id="F8", round_no=1, correct=False, explanation="",
+        root_cause=F8_VERDICT_DISMISSES_LEAK,
+        steps=28, tool_calls=89, cost_yuan=0.06,
+        input_tokens=0, output_tokens=0, elapsed_s=27.0,
+        finished=True, parse_ok=True,
+        detail={
+            "hypotheses": [
+                {"role": "logs", "claim": "payment 调外部风控响应缓慢，约 800ms"},
+                {"role": "metrics", "claim": "order 自身存在约 4.22e+09 字节的内存泄漏"},
+                {"role": "change", "claim": "本时段没有任何配置变更"},
+            ],
+            "cross_exams": [],
+            "verdict": {"parse_ok": True},
+        },
+    )
+
+    axes = attempt_cause_axes(attempt)
+
+    assert axes["verdict"]["内存泄漏"] is False, "结论轴：裁决否掉了它"
+    assert axes["recall"]["内存泄漏"] is True, (
+        "召回轴：metrics 专员**找到过**它 —— 这一格正是 multi 相对 baseline 的唯一差别"
+    )
+    assert axes["recall"]["外部风控变慢"] is True
+
+
+def test_f8_recall_equals_verdict_for_single_answer_agents():
+    """baseline（没有 detail）的召回必须**退化成**它的最终答案。
+
+    否则会凭空给 baseline 记上一笔"找到了"——那是对比里的作弊。
+    """
+    from eval.runner import Attempt, attempt_cause_axes
+
+    attempt = Attempt(
+        fault_id="F8", round_no=1, correct=False, explanation="",
+        root_cause="外部风控服务响应缓慢（约800ms），导致全链路延迟升高。",
+        steps=6, tool_calls=24, cost_yuan=0.012,
+        input_tokens=0, output_tokens=0, elapsed_s=9.4,
+        finished=True, parse_ok=True, detail=None,
+    )
+
+    axes = attempt_cause_axes(attempt)
+
+    assert axes["recall"] == axes["verdict"], (
+        "单答案的 Agent 只有一个环节（它的最终答案），两轴必须一致；"
+        "若不一致，说明召回轴凭空多算了什么"
+    )
+    assert axes["recall"]["内存泄漏"] is False, "baseline 从没提过泄漏"
+
+
+def test_f8_axes_are_empty_for_single_fault_scenarios():
+    """单故障场景不该打两轴（它只有一个原因，两轴必然相同，属于噪音）。"""
+    from eval.runner import Attempt, attempt_cause_axes
+
+    attempt = Attempt(
+        fault_id="F1", round_no=1, correct=True, explanation="",
+        root_cause="外部风控变慢", steps=5, tool_calls=20, cost_yuan=0.01,
+        input_tokens=0, output_tokens=0, elapsed_s=8.0,
+        finished=True, parse_ok=True,
+    )
+    assert attempt_cause_axes(attempt) == {}
+
+
+def test_f8_declares_both_causes_so_the_axes_are_not_vacuous():
+    """元测试：F8 必须真的声明了两个原因，否则上面几条测的是空气。"""
+    from eval.scenarios import SCENARIOS
+
+    f8 = SCENARIOS["F8"]
+    names = [c.name for c in f8.required_causes]
+    assert names == ["外部风控变慢", "内存泄漏"], f"F8 的原因清单不对：{names}"
+
+    # 其他场景不该有原因清单（它们只有一个原因）
+    others = [fid for fid, s in SCENARIOS.items() if s.required_causes and fid != "F8"]
+    assert not others, f"这些场景不该声明 required_causes：{others}"

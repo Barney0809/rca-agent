@@ -422,6 +422,81 @@ def load_report(path: Path) -> Report:
     return report
 
 
+def attempt_cause_axes(attempt: Attempt) -> dict[str, dict[str, bool]]:
+    """两轴判定 —— 只对声明了 `required_causes` 的多故障场景有意义。
+
+    **为什么需要两轴**（F8 上真实发生的事）：
+
+        multi 的 metrics 专员**找到了**内存泄漏，
+        但交叉质证把它说服改口、裁决把它降级成"伴随现象"。
+
+    这是第三种结局：**"找到了，但没当成根因"**。
+    单一的关键词组判定表达不了它 —— 要么看到词就算对，要么被否掉就算错，两种都不对。
+
+        **结论轴**：**最终答案**有没有主张这个原因（= 当前任务要求的答案）
+        **召回轴**：这次尝试里**任何环节**有没有找到它（= 分工覆盖到了没有）
+
+    ⚠️ 两轴**不能互相替代**，也不能加总：
+        · 结论轴是**同口径**比较（两边都只看最终答案），可以拿来比高低；
+        · 召回轴**不是同口径**：多 Agent 一轮有 3 个专员 + 3 个质证 + 1 次裁决，
+          而 baseline 只有一个答案。它更适合用来回答"分工有没有起作用"，
+          而不是"谁更强"。
+    """
+    from eval.scenarios import SCENARIOS, asserted_causes
+
+    sc = SCENARIOS.get(attempt.fault_id)
+    if sc is None or not sc.required_causes:
+        return {}
+
+    verdict = asserted_causes(attempt.root_cause, sc.required_causes)
+
+    detail = attempt.detail or {}
+    texts = [h.get("claim", "") for h in (detail.get("hypotheses") or [])]
+    texts += [x.get("revised_claim", "") for x in (detail.get("cross_exams") or [])]
+    if not texts:
+        # baseline（或任何单 Agent）：它只有一个"环节"，就是它的最终答案
+        texts = [attempt.root_cause]
+
+    recall = {
+        c.name: any(c.asserted(t) for t in texts) for c in sc.required_causes
+    }
+    return {"verdict": verdict, "recall": recall}
+
+
+def _print_cause_axes(report: Report) -> None:
+    """打印两轴判定与各自的命中率。没有多故障场景时什么也不打。"""
+    rows = [
+        (a, attempt_cause_axes(a))
+        for a in report.attempts
+    ]
+    rows = [(a, ax) for a, ax in rows if ax]
+    if not rows:
+        return
+
+    names = list(rows[0][1]["verdict"].keys())
+
+    print()
+    print("  ── 两轴判定（多故障场景）──")
+    print("     结论轴 = 最终答案有没有主张它（同口径，可比较）")
+    print("     召回轴 = 这次尝试里任何环节有没有找到它（分工覆盖，不同口径）")
+    print()
+    for a, ax in rows:
+        v = " ".join(f"{n}{'✅' if ax['verdict'][n] else '❌'}" for n in names)
+        r = " ".join(f"{n}{'✅' if ax['recall'][n] else '❌'}" for n in names)
+        print(f"     {a.fault_id} 第{a.round_no}轮   结论：{v}    召回：{r}")
+
+    print()
+    for axis in ("verdict", "recall"):
+        label = "结论轴" if axis == "verdict" else "召回轴"
+        stats = "  ".join(
+            f"{n}={sum(1 for _, ax in rows if ax[axis][n])}/{len(rows)}" for n in names
+        )
+        print(f"     {label}命中率：{stats}")
+    print()
+    print("     ⚠️ 召回轴不是同口径比较：多 Agent 一轮有 7 个环节，baseline 只有 1 个答案。")
+    print("        它回答的是「分工有没有覆盖到」，不是「谁更强」。")
+
+
 def _convergence_breakdown(report: Report) -> list[str]:
     """列出多 Agent 每个环节的 finished / steps —— 用来定位"到底是哪个环节没收敛"。
 
@@ -518,6 +593,9 @@ def print_report(report: Report) -> None:
         print(f"  {fid:<4} {row['label']:<30} {row['accuracy']:<8.0%} "
               f"{row['mean_steps']:<6.1f} {row['mean_tool_calls']:<6.1f} "
               f"¥{row['mean_cost_yuan']:.4f}")
+
+    # 多故障场景额外打两轴（结论 / 召回）。单故障场景什么也不打。
+    _print_cause_axes(report)
 
 
 def save_report(report: Report) -> Path:
