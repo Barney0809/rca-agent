@@ -109,7 +109,7 @@ from world.loadgen.main import run_load  # noqa: E402
 # compose 里的默认值 —— 实验结束后恢复到这里的**被改过**的字段。
 # 只恢复本次实验真正动过的键，别去动没碰过的参数（那会引入额外变量）。
 DEFAULTS = {
-    "order": {"pool_limit": 64, "pool_acquire_timeout_ms": 2000},
+    "order": {"pool_limit": 64, "pool_acquire_timeout_ms": 2000, "leak_mb_per_req": 0.0},
     "inventory": {"downstream_retries": 1},
     "payment": {"risk_latency_ms": 30, "risk_error_rate": 0.0},
 }
@@ -166,6 +166,8 @@ async def main() -> int:
                     help="payment 的外部风控错误率（F4/F5 用 0.5；正常 0）")
     ap.add_argument("--downstream-retries", type=int, default=None,
                     help="inventory 调用下游的重试次数（F4 用 5；正常 1）")
+    ap.add_argument("--leak-mb-per-req", type=float, default=None,
+                    help="order 每次请求泄漏的 MB 数（F6 用 2；F8 用 0.5；正常 0）")
     ap.add_argument("--concurrency", type=int, default=30)
     ap.add_argument("--max-requests", type=int, default=1500)
     ap.add_argument("--duration", type=float, default=120.0)
@@ -178,6 +180,8 @@ async def main() -> int:
         order_patch["pool_limit"] = args.pool_limit
     if args.pool_acquire_timeout_ms is not None:
         order_patch["pool_acquire_timeout_ms"] = args.pool_acquire_timeout_ms
+    if args.leak_mb_per_req is not None:
+        order_patch["leak_mb_per_req"] = args.leak_mb_per_req
 
     payment_patch: dict = {}
     if args.risk_latency_ms is not None:
@@ -223,7 +227,8 @@ async def main() -> int:
               f"pool_acquire_timeout_ms={k.get('pool_acquire_timeout_ms')} "
               f"risk_latency_ms={k.get('risk_latency_ms')} "
               f"risk_error_rate={k.get('risk_error_rate')} "
-              f"downstream_retries={k.get('downstream_retries')}")
+              f"downstream_retries={k.get('downstream_retries')} "
+              f"leak_mb_per_req={k.get('leak_mb_per_req')}")
 
     result: dict = {
         "label": label,
@@ -268,6 +273,7 @@ async def main() -> int:
             k: v for k, v in order_view.items() if "pool_" in k and "requests" not in k
         }
         result["payment_risk"] = {k: v for k, v in payment_view.items() if "risk" in k}
+        result["order_leak"] = {k: v for k, v in order_view.items() if "leak" in k}
         result["inventory_downstream"] = {
             k: v for k, v in inventory_view.items() if "downstream" in k
         }
@@ -284,6 +290,7 @@ async def main() -> int:
         for title, bucket in (
             ("order 的池仪表", result["order_pool_gauges"]),
             ("payment 的风控指标", result["payment_risk"]),
+            ("order 的泄漏指标", result["order_leak"]),
             ("inventory 的下游调用", result["inventory_downstream"]),
         ):
             if bucket:
@@ -310,7 +317,8 @@ async def main() -> int:
                   f"pool_acquire_timeout_ms={k.get('pool_acquire_timeout_ms')} "
                   f"risk_latency_ms={k.get('risk_latency_ms')} "
                   f"risk_error_rate={k.get('risk_error_rate')} "
-                  f"downstream_retries={k.get('downstream_retries')}")
+                  f"downstream_retries={k.get('downstream_retries')} "
+                  f"leak_mb_per_req={k.get('leak_mb_per_req')}")
 
     result["finished_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     (out_dir / "summary.json").write_text(

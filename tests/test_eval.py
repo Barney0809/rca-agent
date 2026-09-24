@@ -18,6 +18,8 @@ D5 的 baseline 数字**连续作废两次**，两次都不是"算错了"：
 
 from __future__ import annotations
 
+import pytest
+
 from eval.runner import Attempt, Report
 
 
@@ -600,3 +602,83 @@ def test_regression_20_the_exclusion_check_is_not_vacuous():
     live = [fid for fid, s in SCENARIOS.items() if not s.invalidated_reason]
     assert "F7" in live, "F7 是合格的红鲱鱼场景，不能被标成作废"
     assert len(live) >= 6, f"被标作废的场景太多了：{sorted(SCENARIOS)}"
+
+
+# ================================================================
+# #21 否定语境判定再次被措辞绕过
+# ================================================================
+#
+# 真实经过（F8 第一次跑多 Agent）：报告给出 100%，看着就是"多 Agent 第一次被证明有用"。
+# 但读了裁决原文才发现它在讲：
+#
+#     「…order 的 4.22e+09 字节内存泄漏在本窗口内无功能/资源影响，
+#        是被放大的脆弱点而非触发者。」
+#
+# **它把内存泄漏明确降级了** —— 最终结论只给了一个根因，和 baseline 一样不完整。
+# 那个 100% 是假的：`DISMISSAL_MARKERS` 里没有"而非""脆弱点"这类措辞。
+#
+# ⚠️ 这条比 #16 更值得记住的地方：
+#     #16 之后我做了变异测试、写了 4 条用例、全部 SEALED ——
+#     但那 4 条用的都是**同一种措辞**（"只是…并非根因"）。
+#     变异测试只能证明"能抓住作者想象过的那种错误"，
+#     **证明不了能抓住没见过的措辞** —— 因为变异体也是作者写的。
+#
+# 所以这一组用例刻意用**多种不同的降级措辞**，而不是同款的第四遍。
+
+
+# 每一种都是真实出现过的"把关键词降级掉"的写法
+DISMISSAL_PHRASINGS = [
+    # #16 那一版（旧场景里出现过的）
+    "下游 payment 风控变慢只是并发的放大因素，不是触发者。",
+    # #21 那一版（F8 裁决的原文形状）
+    "order 的 4.22e+09 字节内存泄漏在本窗口内无功能/资源影响，是被放大的脆弱点而非触发者。",
+    "内存泄漏只是伴随现象，无法解释观测到的延迟。",
+    "该泄漏不足以解释本次异常。",
+    "order 的内存泄漏与本次故障无关。",
+    "内存泄漏这一说法站不住。",
+    "泄漏不能解释延迟，应予排除。",
+]
+
+
+@pytest.mark.parametrize("text", DISMISSAL_PHRASINGS)
+def test_regression_21_many_dismissal_phrasings_are_all_caught(text: str) -> None:
+    """多种"降级措辞"都必须被识别为"没有主张"。
+
+    刻意用 `parametrize` 把 7 个措辞样本展开成 7 条独立用例 ——
+    这样失败信息能直接指出**是哪种措辞漏了**，而不是笼统地说"这一组挂了"。
+
+    ⚠️ 第一版把 parametrize 写在了一个**嵌套函数**上，然后手动循环调用。
+       那是装饰：pytest 根本不收集嵌套函数，真正生效的是下面那个 for 循环。
+       "看起来参数化了、其实没有" —— 这正是本项目一直在清掉的那类东西。
+    """
+    from eval.scenarios import SCENARIOS
+
+    sc = SCENARIOS["F6"]   # F6 的判据就是「内存/泄漏」+「order」，用它来测最直接
+    ok, _ = sc.judge(text)
+    assert not ok, (
+        f"这段话把关键词降级/否定了，不该算作主张：\n  {text}\n"
+        "（关键词出现 ≠ 主张它 —— 见 harness-log #16 #21）"
+    )
+
+
+def test_regression_21_asserting_still_counts():
+    """正向对照：正常主张的写法不能被误伤。
+
+    没有这一条，"能识别降级"可能只是"永远判错"造成的假绿。
+    """
+    from eval.scenarios import SCENARIOS
+
+    ok, _ = SCENARIOS["F6"].judge("order 自身存在内存泄漏，每次请求约泄漏 0.5MB。")
+    assert ok, "这是标准答案的写法，不该判错"
+
+
+def test_regression_21_the_phrasing_samples_are_actually_diverse():
+    """元测试：确认样本真的是**不同的措辞**，而不是同一句话抄了 7 遍。
+
+    这正是 #21 的教训：同款重复的用例集看起来很多，但覆盖面是一个点。
+    """
+    tails = {p[-6:] for p in DISMISSAL_PHRASINGS}
+    assert len(tails) >= 5, (
+        f"措辞样本的尾部只有 {len(tails)} 种 —— 太同质了，"
+        "覆盖不到真实世界里措辞的多样性（#21 就是这么漏的）"
+    )
