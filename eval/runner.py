@@ -1142,7 +1142,10 @@ def save_report(report: Report) -> Path:
         fp.write_text(
             json.dumps(a.trace, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        a.trace_path = str(fp.relative_to(ROOT))
+        # ⚠️ 一律写 **POSIX 分隔符**：归档会被 Linux（CI runner）读取，
+        #    而 `str(Path)` 在 Windows 上产出的是反斜杠 ⇒ 那边 `ROOT / tp` 找不到文件，
+        #    页面会静默丢掉整段 trace（实测：Linux 上重生成的页面少 429 行）。
+        a.trace_path = str(fp.relative_to(ROOT)).replace("\\", "/")
 
     path = out_dir / "results.json"
     path.write_text(

@@ -85,17 +85,6 @@ def _latest_run() -> Path:
     return cands[-1]
 
 
-def _archived_scenario(run_dir: Path, fault: str, round_no: int) -> Path:
-    """从归档运行里找出某个场景的**数据目录**（护栏与工具都只读它）。"""
-    data = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
-    for a in data["attempts"]:
-        if a["fault_id"] == fault and a["round_no"] == round_no:
-            rel = str(a.get("trace_path") or "")
-            # 归档里 trace 在 <run>/traces/ 下；场景数据在同级 r-*/ 目录（run_id 记在 trace 里）
-            return Path(rel)
-    raise SystemExit(f"归档里找不到 {fault}:{round_no}")
-
-
 def _scenario_dirs() -> list[Path]:
     return sorted((ROOT / "runs").glob("r-2*"))
 

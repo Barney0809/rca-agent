@@ -232,7 +232,9 @@ def totals(data: dict) -> dict:
 def load_trace(data: dict, fault: str, rnd: int) -> list:
     for a in data["attempts"]:
         if a["fault_id"] == fault and a["round_no"] == rnd:
-            tp = a.get("trace_path", "")
+            # ⚠️ 归一化分隔符：老归档里存的是 Windows 反斜杠，在 Linux 上会找不到文件
+            #    ⇒ 页面静默丢掉整段 trace（实测：Linux 上少 429 行、"可从存档复现"变假话）
+            tp = str(a.get("trace_path", "")).replace("\\", "/")
             if tp and (ROOT / tp).exists():
                 return json.loads((ROOT / tp).read_text(encoding="utf-8"))
     return []

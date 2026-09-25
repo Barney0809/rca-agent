@@ -75,7 +75,8 @@ def iter_archived_attempts(run_dir: Path):
     data = json.loads(results.read_text(encoding="utf-8"))
     root = repo_root()
     for attempt in data.get("attempts", []):
-        rel = str(attempt.get("trace_path") or "")
+        # ⚠️ 归一化分隔符：老归档存的是 Windows 反斜杠，Linux 上 `root / tp` 找不到文件
+        rel = str(attempt.get("trace_path") or "").replace("\\", "/")
         path: Path | None = Path(rel) if rel else None
         if path is not None and not path.is_absolute():
             # ⚠️ 归档里存的是**相对仓库根**的路径，不是相对当前工作目录 ——
