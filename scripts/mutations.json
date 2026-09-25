@@ -605,5 +605,36 @@
         ]
       }
     ]
+  },
+  "judge_cross_check": {
+    "harness_log": [
+      "#28"
+    ],
+    "why": "D10: the LLM judge runs as an independent cross-check beside the keyword scorer, and is deliberately NOT part of `correct`. The dangerous failure is silent: if a judge failure (unknown / error) were counted as agreement, the report would claim 'both rulers agree' when in fact nothing was measured - the same class of silent distortion as #16/#21.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "judge-a-failure-counts-as-agreement",
+        "desc": "Treat an unusable judge verdict (unknown / error) as if the judge had agreed. The cross-check then reports agreement while measuring nothing.",
+        "file": "eval/runner.py",
+        "find": "        if v == \"unknown\" or v.startswith(\"error:\"):\n            return None",
+        "replace": "        if v == \"unknown\" or v.startswith(\"error:\"):\n            return True",
+        "expect_red": [
+          "tests/test_eval.py::test_judge_failure_is_never_counted_as_agreement"
+        ]
+      },
+      {
+        "id": "judge-b-drop-the-disagreement-detail",
+        "desc": "Stop recording the disagreement entries. The count could still be reported, but nobody could check who was right - and #16/#21 were both found by reading exactly these.",
+        "file": "eval/runner.py",
+        "find": "                \"text\": a.root_cause[:300],\n            })",
+        "replace": "                \"text\": \"\",\n            })",
+        "expect_red": [
+          "tests/test_eval.py::test_disagreement_is_surfaced_not_swallowed"
+        ]
+      }
+    ]
   }
 }

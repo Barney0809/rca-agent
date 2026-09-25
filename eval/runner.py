@@ -195,6 +195,8 @@ class Report:
             "json_parse_rate": sum(1 for i in scored if i.parse_ok) / len(accs),
             "per_fault": per_fault,
             # ---- 被排除的作废场景（必须在报告里显式说出来）----
+            # ---- 两把尺子（D10）----
+            **_judge_agreement(scored),
             "invalidated": invalidated,
             "n_excluded_attempts": len(excluded),
             "n_attempts_total": len(self.attempts),
@@ -238,6 +240,7 @@ def run(
     mode: str = "live",
     agent: str = "baseline",
     include_invalidated: bool = False,
+    judge_fn=None,
     verbose: bool = True,
 ) -> Report:
     cfg = LlmConfig.from_env()
@@ -295,9 +298,9 @@ def run(
 
             if agent == "multi":
                 attempt = _run_multi_slice(client, ctx, fid, rnd, score, model,
-                                           max_steps, cross_exam_steps)
+                                           max_steps, cross_exam_steps, judge_fn)
             else:
-                attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score)
+                attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score, judge_fn)
 
             report.attempts.append(attempt)
             if verbose:
@@ -319,6 +322,7 @@ def _run_baseline_slice(
     fid: str,
     rnd: int,
     score: ScenarioScore,
+    judge_fn=None,
 ) -> Attempt:
     diag = baseline_agent.diagnose(ctx)
     correct, _ = score.judge(diag.root_cause)
@@ -351,6 +355,7 @@ def _run_baseline_slice(
         # ★ 打转统计（D9）：`ctx` 就是这次 diagnose 用的上下文，
         #   工具调用全走 ToolBox，所以计数都在它身上。
         repeat_calls=getattr(ctx, "repeat_calls", 0),
+        detail=judge_detail(score, diag.root_cause, judge_fn),
     )
 
 
@@ -363,6 +368,7 @@ def _run_multi_slice(
     model: str | None,
     max_steps: int,
     cross_exam_steps: int,
+    judge_fn=None,
 ) -> Attempt:
     """跑一次完整的多 Agent 流程（三轮：调查 → 交叉质证 → 裁决）。
 
@@ -406,6 +412,7 @@ def _run_multi_slice(
             "hypotheses": [h.to_dict() for h in res.hypotheses],
             "cross_exams": [c.to_dict() for c in res.cross_exams],
             "verdict": res.verdict.to_dict(),
+            **judge_detail(score, verdict_text, judge_fn),
         },
     )
 
@@ -504,6 +511,66 @@ def _print_cause_axes(report: Report) -> None:
     print("        它回答的是「分工有没有覆盖到」，不是「谁更强」。")
 
 
+# ================================================================
+# LLM 裁判（D10）：独立于关键词判定的**第二把尺子**
+# ================================================================
+#
+# 设计由数据决定（harness-log #28）：
+#   · 关键词判定 —— 免费、确定、已知措辞上全对   → 保留为主判据
+#   · LLM 裁判   —— 抗未见措辞（对抗样本 0/3 → 3/3）→ 独立交叉校验
+#   · **两者分歧时报出来** —— #16/#21 正是这样被发现的
+#
+# ⚠️ 裁判**不参与** `correct` 的计算，只做交叉校验。
+#    理由：它的成本与抖动都还没在规模上量清楚（目前 8/8 自一致、样本很小），
+#    直接拿它当主判据会把一个没量清的误差源引到所有数字里。
+
+
+def judge_detail(score, text: str, judge_fn) -> dict:
+    """对这次结论跑一遍 LLM 裁判，把结论记进 detail。
+
+    `judge_fn(文本, 原因名) -> "asserted" | "dismissed" | "absent" | "unknown"`
+    传 None 表示这次不跑裁判（默认）。
+    """
+    from eval.scenarios import CAUSE_LABELS, Cause
+
+    if judge_fn is None or score is None or not text.strip():
+        return {}
+
+    causes = score.required_causes or (
+        Cause(
+            name=CAUSE_LABELS.get(score.fault_id, score.fault_id),
+            keyword_groups=score.keyword_groups,
+        ),
+    )
+
+    verdicts: dict[str, str] = {}
+    for c in causes:
+        try:
+            verdicts[c.name] = str(judge_fn(text, c.name))
+        except Exception as exc:  # noqa: BLE001
+            # 裁判自己出错 → 如实记录，**不许当成一致**
+            verdicts[c.name] = f"error:{type(exc).__name__}"
+    return {"judge": verdicts}
+
+
+def judge_asserts_all(attempt: Attempt):
+    """裁判是否认为"所有必需原因都被主张了"。
+
+    返回 True / False / **None**：
+    None 表示"这次没有可用的裁判结论"（没跑、或裁判自己失败/输出不合法）。
+    ⚠️ **None 绝不能被当成一致** —— 那会把"裁判失败"伪装成"两把尺子一致"，
+       正是本项目反复在防的那种静默失真。
+    """
+    info = (attempt.detail or {}).get("judge") or {}
+    if not info:
+        return None
+    for v in info.values():
+        v = str(v)
+        if v == "unknown" or v.startswith("error:"):
+            return None
+    return all(str(v) == "asserted" for v in info.values())
+
+
 def stop_reason(attempt: Attempt) -> str:
     """这次尝试**为什么停下来**。
 
@@ -581,6 +648,69 @@ def _convergence_breakdown(report: Report) -> list[str]:
     return lines
 
 
+
+def _make_judge_fn():
+    """构造真的裁判函数（只在 --judge 时才建，避免默认路径多花钱）。"""
+    from eval.judge import judge_cause
+    from rca.llm.provider import DeepSeekClient, LlmConfig
+
+    client = DeepSeekClient(LlmConfig.from_env())
+
+    def _fn(text: str, cause: str) -> str:
+        return judge_cause(client, text, cause).verdict
+
+    return _fn
+
+
+def _judge_agreement(attempts: list[Attempt]) -> dict:
+    """把"两把尺子"的一致情况汇总出来。没跑裁判时返回空 dict。"""
+    judged = [a for a in attempts if judge_asserts_all(a) is not None]
+    if not judged:
+        return {}
+
+    agree = 0
+    disagreements: list[dict] = []
+    for a in judged:
+        j = bool(judge_asserts_all(a))
+        if j == bool(a.correct):
+            agree += 1
+        else:
+            disagreements.append({
+                "fault": a.fault_id,
+                "round": a.round_no,
+                "keyword_correct": bool(a.correct),
+                "judge_asserts_all": j,
+                "judge": (a.detail or {}).get("judge", {}),
+                "text": a.root_cause[:300],
+            })
+    return {
+        "n_judged": len(judged),
+        "judge_agree": agree,
+        "judge_disagreements": disagreements,
+    }
+
+
+def _print_judge_agreement(agg: dict) -> None:
+    """打印两把尺子的交叉校验结果。没跑裁判时什么都不打。"""
+    if not agg.get("n_judged"):
+        return
+    n = agg["n_judged"]
+    agree = agg["judge_agree"]
+    print()
+    print("  ── 两把尺子（D10）──")
+    print(f"     裁判覆盖 {n} 次尝试；与关键词判定一致 {agree}/{n}")
+    print("     ⚠️ 裁判**不参与** correct 的计算，只做独立交叉校验")
+    ds = agg.get("judge_disagreements") or []
+    if not ds:
+        print("     分歧：无")
+        return
+    print(f"     分歧：{len(ds)} 条 —— **这些必须人工读原文判谁对**")
+    for d in ds:
+        print(f"       · {d['fault']} 第{d['round']}轮　关键词 correct={d['keyword_correct']}"
+              f"　裁判 asserts_all={d['judge_asserts_all']}")
+        print(f"         裁判逐项：{d['judge']}")
+        print(f"         原文：{d['text'][:160]}")
+
 def print_report(report: Report) -> None:
     agg = report.agg()
     if not agg:
@@ -651,6 +781,8 @@ def print_report(report: Report) -> None:
     _print_cause_axes(report)
     # 停止原因与打转统计（D9）—— 把"撞预算"和"在打转"分开
     _print_stop_reasons(report)
+    # 两把尺子的交叉校验（D10）—— 没跑裁判时什么也不打
+    _print_judge_agreement(agg)
 
 
 def save_report(report: Report) -> Path:
@@ -690,6 +822,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--agent", choices=["baseline", "multi"], default="baseline",
                    help="baseline = 单 Agent；multi = 三个专职 Agent + 交叉质证 + 裁决")
     p.add_argument("--list-scenarios", action="store_true", help="只看有哪些场景可用")
+    p.add_argument("--judge", action="store_true",
+                   help="额外跑一次 LLM 裁判做**独立交叉校验**（不参与 correct 计算）；"
+                        "两者分歧时会单列出来")
     p.add_argument("--include-invalidated", action="store_true",
                    help="连**已作废**的场景一起跑（结果不参与聚合）。"
                         "只在需要复现'某道题曾经出错过'时用")
@@ -730,6 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         agent=args.agent,
         include_invalidated=args.include_invalidated,
+        judge_fn=_make_judge_fn() if args.judge else None,
     )
     print_report(report)
     if report.attempts:

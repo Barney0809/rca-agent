@@ -878,3 +878,107 @@ def test_regression_28_the_three_way_split_is_actually_reachable():
         keyword_verdict("payment 调用的外部风控不可用，故障沿 payment→inventory→order 传播。", cause),
     }
     assert got == {"asserted", "dismissed", "absent"}, f"三种结局没被全覆盖：{got}"
+
+# ================================================================
+# D10：两把尺子接进评分路径
+# ================================================================
+#
+# 设计由数据决定（harness-log #28）：
+#   关键词判定 = 主判据（免费、确定、已知措辞上全对）
+#   LLM 裁判   = **独立交叉校验**，**不参与 correct 的计算**
+#   两者分歧 → 单列出来（#16/#21 正是这样被发现的）
+#
+# 裁判**不参与** correct 的理由：它的成本与抖动都还没在规模上量清楚
+# （目前自一致 8/8，但样本很小）。直接拿它当主判据，
+# 等于把一个没量清的误差源引进所有数字里 —— 那是本项目一直在防的事。
+
+
+def _sc(fid: str = "F1"):
+    from eval.scenarios import SCENARIOS
+
+    return SCENARIOS[fid]
+
+
+def _attempt_with(fid: str, correct: bool, detail: dict | None = None):
+    from eval.runner import Attempt
+
+    return Attempt(
+        fault_id=fid, round_no=1, correct=correct, explanation="",
+        root_cause="外部风控响应变慢（约800ms）", steps=5, tool_calls=20,
+        cost_yuan=0.01, input_tokens=0, output_tokens=0, elapsed_s=8.0,
+        finished=True, parse_ok=True, detail=detail or {},
+    )
+
+
+def test_judge_detail_records_a_verdict_per_required_cause():
+    from eval.runner import judge_detail
+
+    seen: list[str] = []
+
+    def fake(text, cause):
+        seen.append(cause)
+        return "asserted"
+
+    d = judge_detail(_sc("F1"), "外部风控变慢", fake)
+    assert d["judge"] == {"外部风控变慢": "asserted"}
+    assert seen == ["外部风控变慢"], "对每个必需原因各判一次"
+
+    # 多故障场景（F8）要判**两条**
+    d8 = judge_detail(_sc("F8"), "风控变慢 + 内存泄漏", fake)
+    assert set(d8["judge"]) == {"外部风控变慢", "内存泄漏"}, d8
+
+
+def test_judge_detail_is_empty_when_no_judge_is_configured():
+    """没传 judge_fn（默认）→ 什么也不记，也**不该多花一分钱**。"""
+    from eval.runner import judge_detail
+
+    assert judge_detail(_sc("F1"), "任意文本", None) == {}
+
+
+def test_judge_failure_is_never_counted_as_agreement():
+    """⚠️ 核心：裁判**自己失败**时，绝不能被当成"两把尺子一致"。
+
+    这是本项目反复在防的一类静默失真：
+    把"没测出来"伪装成"测出来了一致"。
+    """
+    from eval.runner import judge_asserts_all, judge_detail
+
+    for bad in ("unknown", "error:TimeoutError"):
+        detail = judge_detail(_sc("F1"), "外部风控变慢", lambda t, c, b=bad: b)
+        a = _attempt_with("F1", correct=True, detail=detail)
+        assert judge_asserts_all(a) is None, (
+            f"裁判给出 {bad!r} 时必须返回 None（不可用），而不是 True/False"
+        )
+
+    # 逐项混合：一条对一条失败 → 整个不可用
+    mixed = {"judge": {"A": "asserted", "B": "unknown"}}
+    assert judge_asserts_all(_attempt_with("F8", correct=True, detail=mixed)) is None
+
+
+def test_disagreement_is_surfaced_not_swallowed():
+    """两把尺子分歧时必须**列出来**，而且要带原文供人复核。"""
+    from eval.runner import Report, _judge_agreement
+
+    # 关键词判定说"对"，裁判说"根本没提" → 分歧
+    a1 = _attempt_with("F1", correct=True, detail={"judge": {"外部风控变慢": "absent"}})
+    # 两把尺子都说"对" → 一致
+    a2 = _attempt_with("F1", correct=True, detail={"judge": {"外部风控变慢": "asserted"}})
+
+    agg = _judge_agreement([a1, a2])
+    assert agg["n_judged"] == 2
+    assert agg["judge_agree"] == 1
+    ds = agg["judge_disagreements"]
+    assert len(ds) == 1
+    assert ds[0]["keyword_correct"] is True
+    assert ds[0]["judge_asserts_all"] is False
+    assert ds[0]["text"], "分歧条目必须带原文，否则人没法复核"
+
+
+def test_judge_agreement_is_empty_without_a_judge_run():
+    """没跑裁判 → 聚合结果里**不含**任何裁判字段，报告也不会打那一节。"""
+    from eval.runner import Report, _judge_agreement
+
+    assert _judge_agreement([_attempt_with("F1", correct=True)]) == {}
+    agg = Report(model="m", mode="live", rounds=3, started_at="t",
+                 attempts=[_attempt_with("F1", correct=True)]).agg()
+    assert "n_judged" not in agg or not agg.get("n_judged")

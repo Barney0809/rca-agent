@@ -409,3 +409,21 @@ def keyword_verdict(text: str, cause: Cause) -> str:
         any(kw.lower() in low for kw in group) for group in cause.keyword_groups
     ]
     return "dismissed" if all(present) else "absent"
+
+# ================================================================
+# 每个场景的"原因标签"：给 LLM 裁判用的人话说法
+# ================================================================
+#
+# ⚠️ **只此一份**：`eval/runner.py`（评分路径）与 `eval/judge_audit.py`（审计）
+#    都从这里取。各自写一份的话，两边迟早走散 ——
+#    而"两份判定不一致"这种 bug 极难发现（本项目已经栽过一次）。
+CAUSE_LABELS: dict[str, str] = {
+    "F1": "外部风控变慢",
+    "F2": "外部风控变慢",
+    "F3": "inventory 本环节处理变慢",
+    "F4": "inventory 的重试次数配置漂移",
+    "F5": "外部风控错误率升高",
+    "F6": "order 内存泄漏",
+    "F7": "外部风控变慢",
+    "F8": "内存泄漏",
+}
