@@ -435,6 +435,166 @@ def test_regression_20_f7_precondition_is_enforced_not_just_documented():
 
 
 # ================================================================
+# 静态守卫：不许有**未定义的名字**（ruff F821）
+# ================================================================
+#
+# 真实经历（同一个手误犯了三次）：
+#
+#   用"替换 def 行"的方式插入新函数时，忘了把原函数的 `def` 行拼回去。
+#   结果是 —— **原函数的函数体被吞进了上一个函数**。
+#
+#   而且它**不会报语法错**：Python 不要求缩进回退，
+#   所以 4 空格缩进的旧函数体紧接着新函数体，就被当成同一个函数的延续。
+#   `ast.parse` 也认为合法。
+#
+#   后果：函数静默消失，调用它的地方要到**运行时**才 NameError。
+#   第一次是 docstring 首行被删（语法错，立刻发现），
+#   后两次都是这个"函数被吞"，其中一次是 `_convergence_breakdown`
+#   被吞进了 `_print_stop_reasons` —— 报告一打印就会炸，
+#   但如果那条路径没被测到，它会一直藏着。
+#
+# ⚠️ **手工"记得把 def 行拼回去"是纪律，纪律会失效（#1 的教训）。**
+#    所以这里把它变成自动检查：未定义的名字在 ruff 里是 F821。
+#
+# 为什么只查 F821 而不查全部规则：其余规则（未用导入、行太长、重复导入）
+# 是**风格**，把它们做成硬门禁会制造大量与缺陷无关的假红。
+# 这一条不一样 —— 它对应的正是"代码已经坏了"。
+
+
+def test_no_undefined_names_in_the_source_tree():
+    """静态检查：src / eval / scripts / world / tests 里不许有未定义的名字。"""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", ".", "--select", "F821", "--no-cache"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode == 0, (
+        "发现未定义的名字（F821）—— 通常意味着有函数/变量在编辑时被吞掉了：\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+
+
+def test_the_undefined_name_check_actually_catches_something(tmp_path):
+    """元测试：确认上面那条不是"ruff 没跑起来"造成的假绿。
+
+    直接喂一段**确定含未定义名字**的代码给它，它必须报错。
+    这也顺带证明了 ruff 在当前解释器里是可用的。
+    """
+    import subprocess
+    import sys
+
+    bad = tmp_path / "bad_f821_probe.py"
+    bad.write_text("def f():\n    return never_defined_anywhere(1)\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", str(bad), "--select", "F821", "--no-cache"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode != 0, (
+        "ruff 没有报出这个明显的未定义名字 —— 那么上面的守卫是假绿的。\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    assert "F821" in (proc.stdout + proc.stderr)
+
+
+# ================================================================
+# 封堵清单对账（D9）：把"声称已封堵"变成机器可校验
+# ================================================================
+#
+# 项目规则是「一条错误只有在回归用例能变红之后才算封堵」，
+# `docs/harness-log.md` 的总览表逐条声明了状态。
+#
+# 但**声明和一个可执行检查是两件事**：表格写"🟢 已封堵"是人的断言，
+# 而断言会过期 —— 代码改了、用例删了、变异组失效了，表格不会自己变红。
+#
+# `scripts/seal_report.py` 把两者对上。下面守的是它的**解析器**：
+# 解析错了，对账就会得出假结论（比如"表格里没有任何声明，所以全都一致"）。
+
+
+def _seal_mod():
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root / "scripts") not in _sys.path:
+        _sys.path.insert(0, str(root / "scripts"))
+    import seal_report  # noqa: PLC0415
+
+    return seal_report
+
+
+def test_seal_report_parses_the_declared_statuses():
+    """必须能读出表格里的封堵标记，且读到的条目够多。"""
+    mod = _seal_mod()
+    declared = mod.declared_statuses()
+
+    assert len(declared) >= 20, (
+        f"只从 harness-log 里读到 {len(declared)} 条声明：{sorted(declared)}\n"
+        "表格格式可能变了，而解析器没跟上 —— 那会让对账静默失真。"
+    )
+
+    # 抽查几个性质不同的条目
+    assert declared.get("#14") == mod.SEALED_MARK, "#14 应读成已封堵"
+    assert declared.get("#20") == mod.PARTIAL_MARK, "#20 应读成部分封堵"
+    assert declared.get("P4") == mod.SEALED_MARK, "P4 应读成已封堵"
+
+
+def test_seal_report_covers_every_mutation_group():
+    """每个变异组都必须标注它对应哪些 harness-log 条目。
+
+    没有这个映射，对账就不知道该拿哪个变异组去验证哪条声明 ——
+    整个机制会退化成"跑了一堆变异，但没有结论"。
+    """
+    import json
+
+    root = Path(__file__).resolve().parent.parent
+    spec = json.loads((root / "scripts" / "mutations.json").read_text(encoding="utf-8"))
+
+    missing = [g for g, s in spec.items() if not s.get("harness_log")]
+    assert not missing, f"这些变异组没有标注 harness_log：{missing}"
+
+    all_items = {i for s in spec.values() for i in s["harness_log"]}
+    assert len(all_items) >= 8, f"映射覆盖的条目太少：{sorted(all_items)}"
+
+
+def test_seal_report_reports_unbacked_claims():
+    """核心价值：它必须**列出**"声明已封堵却没有变异组背书"的条目。
+
+    这类条目不是错误，但它们目前只靠人的记忆维持 ——
+    而 harness-log #1 已经证明"靠人记得"会失效。
+    如果这个脚本不把它列出来，那它就只是在重复表格，没有增加任何信息。
+    """
+    mod = _seal_mod()
+    import json
+
+    root = Path(__file__).resolve().parent.parent
+    spec = json.loads((root / "scripts" / "mutations.json").read_text(encoding="utf-8"))
+    declared = mod.declared_statuses()
+
+    covered = {i for s in spec.values() for i in s["harness_log"]}
+    unbacked = [
+        i for i, m in declared.items()
+        if m == mod.SEALED_MARK and i not in covered
+    ]
+
+    # 当前确实存在这样的条目（早期是手工验证的）。断言它非空，
+    # 是为了证明"这个检查有东西可查" —— 如果哪天补全了，把它改成 >= 0 并注明即可。
+    assert unbacked, (
+        "现在应该存在若干'已封堵但没有变异组'的条目（#2~#13 是手工验证的）。"
+        "若确实已全部补齐，请把这条断言改为 >= 0 并说明。"
+    )
+
+
+# ================================================================
 # regression_#6：第三方库写的日志不能整类被漏掉
 # ================================================================
 

@@ -109,6 +109,7 @@ class CrossExam:
     parse_ok: bool = False
     steps: int = 0
     tool_calls: int = 0
+    repeat_calls: int = 0            # ★ 打转统计（D9）
     cost_yuan: float = 0.0
     finished: bool = False
     raw_text: str = ""
@@ -133,6 +134,7 @@ class CrossExam:
             "finished": self.finished,
             "steps": self.steps,
             "tool_calls": self.tool_calls,
+            "repeat_calls": self.repeat_calls,     # ★ 打转统计（D9）
             "cost_yuan": round(self.cost_yuan, 6),
         }
 
@@ -247,6 +249,7 @@ def cross_examine(
         break
 
     x.tool_calls = local_ctx.tool_calls
+    x.repeat_calls = local_ctx.repeat_calls      # ★ 打转统计（D9）
     x.cost_yuan = cost
     return x
 
@@ -432,6 +435,7 @@ class MultiAgentResult:
     n_llm_calls: int = 0
     total_tool_calls: int = 0
     denied_tool_calls: int = 0
+    repeat_calls: int = 0            # ★ 打转统计（D9）
 
     @property
     def total_cost_yuan(self) -> float:
@@ -485,8 +489,9 @@ def diagnose_multi(
         先给足预算、保证"没跑完"不会被混进结论里；
         真实需要多少步，由 D12 按实测分布定稿。
     """
-    from concurrent.futures import ThreadPoolExecutor
-
+    # ⚠️ 这里**不要**再 `from concurrent.futures import ThreadPoolExecutor` ——
+    #    本模块顶部已经导入过它了。重复导入会遮蔽外层名字（ruff F811），
+    #    而且让人误以为这是函数内的局部依赖。
     started = time.perf_counter()
     out = MultiAgentResult()
 
@@ -522,4 +527,7 @@ def diagnose_multi(
         c.tool_calls for c in out.cross_exams
     )
     out.denied_tool_calls = sum(h.denied_tool_calls for h in out.hypotheses)
+    out.repeat_calls = sum(h.repeat_calls for h in out.hypotheses) + sum(
+        c.repeat_calls for c in out.cross_exams
+    )
     return out

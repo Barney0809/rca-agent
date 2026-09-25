@@ -133,6 +133,19 @@ except Exception:
     pass
 
 
+class MutationNotApplicable(Exception):
+    """变异定义与当前源码对不上了（查找串找不到 / 找到多处）。
+
+    ⚠️ 这不是"用例没封堵"，而是"**这件事现在无法被校验**"。
+    两者必须分开报：前者说明代码有问题，后者说明**变异定义过期了**。
+
+    真实案例（2026-09-25）：重构 `judge()` 之后，
+    `score-a-ignore-dismissal-context` 的查找串就再也匹配不到了 ——
+    而在此之前它已经"SEALED"过好几轮。**一个过期的变异体会一直假装通过，**
+    直到有人真的去跑它。这正是"封堵清单"要抓的东西。
+    """
+
+
 def load_spec() -> dict:
     if not SPEC_PATH.exists():
         sys.exit(f"找不到变异定义文件：{SPEC_PATH}")
@@ -234,9 +247,13 @@ def apply_mutation(copy_dir: Path, mut: dict) -> None:
     text = target.read_text(encoding="utf-8")
     n = text.count(mut["find"])
     if n != 1:
-        sys.exit(
-            f"变异 {mut['id']} 无法应用：在 {mut['file']} 里找到 {n} 处匹配（期望恰好 1 处）。\n"
-            "多半是源码改了，而 mutations.json 没跟着更新。"
+        # ⚠️ 这里**抛异常**而不是 sys.exit：
+        #    一个过期的变异体不该让整份对账中止 ——
+        #    否则"清单跑不完"会被误读成"清单坏了"，
+        #    而真实情况是"这一条现在无法被校验"。
+        raise MutationNotApplicable(
+            f"在 {mut['file']} 里找到 {n} 处匹配（期望恰好 1 处）。"
+            "多半是源码改了，而这条变异定义没跟着更新。"
         )
     target.write_text(text.replace(mut["find"], mut["replace"]), encoding="utf-8")
 
@@ -277,7 +294,14 @@ def check_group(group_name: str, group: dict) -> bool:
 
         copy_dir = make_copy(mut["id"])
         verify_mutant_src_is_loaded(copy_dir)
-        apply_mutation(copy_dir, mut)
+        try:
+            apply_mutation(copy_dir, mut)
+        except MutationNotApplicable as exc:
+            all_sealed = False
+            print("  [STALE] 这条变异定义已经过期，无法应用 —— **这件事目前无法被校验**。")
+            print(f"         {exc}")
+            print(f"         定义：{SPEC_PATH.relative_to(ROOT)} 里的 {mut['id']}")
+            continue
 
         rc, log = run_pytest(copy_dir, tests, copy_dir / "pytest.log")
         got = failed_tests(log)

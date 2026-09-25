@@ -67,6 +67,7 @@ class Hypothesis:
     steps: int = 0
     tool_calls: int = 0
     denied_tool_calls: int = 0      # 越权尝试次数（应当为 0）
+    repeat_calls: int = 0           # 参数完全相同的重复工具调用次数（D9 打转检测）
     cost_yuan: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -87,6 +88,10 @@ class Hypothesis:
             "steps": self.steps,
             "tool_calls": self.tool_calls,
             "denied_tool_calls": self.denied_tool_calls,
+            # ⚠️ 与 #18 同一个教训：**存档少一个字段，事后就少一条线索**。
+            #    打转统计如果不进存档，报告里"步数偏高"这个现象就永远说不清
+            #    是"在深挖"还是"在打转"。
+            "repeat_calls": self.repeat_calls,
             "cost_yuan": round(self.cost_yuan, 6),
             "elapsed_s": round(self.elapsed_s, 1),
             "finished": self.finished,
@@ -171,6 +176,7 @@ class SpecialistAgent:
 
         h.tool_calls = local_ctx.tool_calls
         h.denied_tool_calls = len(box.denials)
+        h.repeat_calls = local_ctx.repeat_calls      # ★ 打转统计（D9）
         h.cost_yuan = diag_cost
         h.elapsed_s = time.perf_counter() - started
         return h

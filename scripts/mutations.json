@@ -1,7 +1,12 @@
 {
   "cross_exam_prompt_render": {
+    "harness_log": [
+      "#14"
+    ],
     "why": "harness-log: CROSS_EXAM_PROMPT contains a JSON output template, so str.format() treats its { } as placeholders and raises KeyError. Rendering was extracted into build_cross_exam_message() and must keep using str.replace().",
-    "tests": ["tests/test_agents.py"],
+    "tests": [
+      "tests/test_agents.py"
+    ],
     "mutations": [
       {
         "id": "m1-format-instead-of-replace",
@@ -28,8 +33,13 @@
     ]
   },
   "stdout_gbk_guard": {
+    "harness_log": [
+      "P4"
+    ],
     "why": "P4: when stdout is redirected, Python falls back to the local code page (GBK / cp936), so printing a character GBK cannot encode raises UnicodeEncodeError and throws away the whole output plus the exit code. The correct guard -- measured, not reasoned -- is reconfigure(encoding=\"utf-8\", errors=\"replace\"); both keywords are required.",
-    "tests": ["tests/test_offline.py"],
+    "tests": [
+      "tests/test_offline.py"
+    ],
     "mutations": [
       {
         "id": "p4-a-guard-on-the-wrong-stream",
@@ -64,8 +74,13 @@
     ]
   },
   "chat_call_signature": {
+    "harness_log": [
+      "#15"
+    ],
     "why": "A call site passed max_tokens=2048 to DeepSeekClient.chat(), whose signature has no such parameter. No unit test could reach it (the adjudication step costs real API calls), so it only exploded after the whole multi-agent loop had run and the money was already spent. The seal is a static check that every chat() call site matches the real signature.",
-    "tests": ["tests/test_agents.py"],
+    "tests": [
+      "tests/test_agents.py"
+    ],
     "mutations": [
       {
         "id": "sig-a-reinject-max-tokens-in-adjudicate",
@@ -90,15 +105,23 @@
     ]
   },
   "scoring_and_reproducibility": {
+    "harness_log": [
+      "#16",
+      "#17",
+      "#18",
+      "#19"
+    ],
     "why": "Three separate ways the D7 measurement lied: (#16) the keyword scorer counted a mention that the answer explicitly DISMISSED, so the multi-agent run was scored 100% while it had actually fallen for the red herring; (#17) the cross-examination step budget was hardcoded to 4 and not wired to --max-steps, while the report told the user to raise --max-steps; (#18) CrossExam snapshots omitted `finished`, so a 'convergence 0%' report could not say which role failed; (#19) root_cause was truncated to 400 chars while `correct` was computed on the full text, so 2 of 18 stored verdicts could not be reproduced from their own archive.",
-    "tests": ["tests/test_eval.py"],
+    "tests": [
+      "tests/test_eval.py"
+    ],
     "mutations": [
       {
         "id": "score-a-ignore-dismissal-context",
         "desc": "#16: remove the dismissal check, so a keyword counts even when the answer explicitly rejects it. This is exactly how the red-herring verdict was scored 100%.",
         "file": "eval/scenarios.py",
-        "find": "                if any(m in clause for m in DISMISSAL_MARKERS):\n                    continue\n",
-        "replace": "                # mutation: dismissal check removed (pre-#16 behaviour)\n",
+        "find": "        if any(m in clause for m in DISMISSAL_MARKERS):\n            continue\n",
+        "replace": "        # mutation: dismissal check removed (pre-#16 behaviour)\n",
         "expect_red": [
           "tests/test_eval.py::test_regression_16_dismissed_cause_is_not_a_hit"
         ]
@@ -166,14 +189,19 @@
     ]
   },
   "fault_catalog_integrity": {
+    "harness_log": [
+      "#20"
+    ],
     "why": "A fault definition carries two hand-written lists: `patches` (what really changes) and `changes` (what gets written to the change log). Their only link is an env-var name, so a mismatch is silent: the scenario still runs and still writes data, but the change record comes out as `from: null, to: null`. That is corrupted data, not a harder scenario -- and it only shows up when a NEW fault is added, which is exactly when nobody is looking.",
-    "tests": ["tests/test_offline.py"],
+    "tests": [
+      "tests/test_offline.py"
+    ],
     "mutations": [
       {
         "id": "catalog-a-revert-to-hand-maintained-mapping",
         "desc": "Restore the historical bug: map env-var names through a short hand-maintained dict with an env_key.lower() fallback. Then any newly added fault silently writes null change values.",
         "file": "scripts/inject_fault.py",
-        "find": "    field = name.lower()\n    return _KNOB_ALIASES.get(field, field)",
+        "find": "    knob_name = name.lower()\n    return _KNOB_ALIASES.get(knob_name, knob_name)",
         "replace": "    return _KNOB_ALIASES.get(env_key, env_key.lower())",
         "expect_red": [
           "tests/test_offline.py::test_every_fault_change_entry_resolves_to_a_real_patch",
@@ -203,8 +231,13 @@
     ]
   },
   "invalidated_scenario_exclusion": {
+    "harness_log": [
+      "#20"
+    ],
     "why": "#20: F2's ground truth was proven inverted by a control experiment, but the scenario is kept in the catalog as a documented counter-example. That creates a new risk -- the bad question keeps polluting every accuracy comparison, invisibly (you just think 'accuracy is low'). Excluding it must be a mechanism (a field + filtering in the aggregate + disclosure in the report), not a matter of remembering.",
-    "tests": ["tests/test_eval.py"],
+    "tests": [
+      "tests/test_eval.py"
+    ],
     "mutations": [
       {
         "id": "inval-a-aggregate-everything",
@@ -229,8 +262,13 @@
     ]
   },
   "two_axis_cause_scoring": {
+    "harness_log": [
+      "#21"
+    ],
     "why": "F8 exposed a third outcome that a single keyword judgement cannot express: 'a specialist FOUND it, but the adjudication demoted it'. Scoring that as correct reproduces #21's false positive; scoring it as a plain miss conflates it with baseline's 'never found it at all'. The fix splits the judgement into a verdict axis (did the final answer assert it) and a recall axis (did any component find it).",
-    "tests": ["tests/test_eval.py"],
+    "tests": [
+      "tests/test_eval.py"
+    ],
     "mutations": [
       {
         "id": "axes-a-recall-ignores-specialist-claims",
@@ -250,6 +288,92 @@
         "replace": "    def asserted(self, text: str) -> bool:\n        \"\"\"这段话有没有主张这个原因（所有组都要被主张）。\"\"\"\n        return all(_asserted_flags(text, self.keyword_groups, dismissal_aware=False))",
         "expect_red": [
           "tests/test_eval.py::test_f8_verdict_axis_separates_the_two_causes"
+        ]
+      }
+    ]
+  },
+  "loop_defense_and_static_guard": {
+    "harness_log": [
+      "#23",
+      "#24"
+    ],
+    "why": "D9. Two findings. (#24) Measured evidence: one baseline attempt made 87 tool calls in 14 steps and produced nothing -- and the report could not tell 'digging deeper' from 'spinning in place', which need opposite fixes. Detection lives in ToolBox.call, the single exit for tool calls, so every agent gets it. (#23) Three times an edit swallowed a function's `def` line, leaving its body absorbed into the previous function -- which is VALID Python, so ast.parse stays silent and the loss only shows up as a runtime NameError.",
+    "tests": [
+      "tests/test_loop_defense.py",
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "loop-a-never-warn-the-model",
+        "desc": "Raise the warning threshold so the model is never told it is repeating itself. Counting without telling is useless -- the model cannot see the counter and just keeps going.",
+        "file": "src/rca/tools.py",
+        "find": "    REPEAT_WARN_AT = 3",
+        "replace": "    REPEAT_WARN_AT = 99",
+        "expect_red": [
+          "tests/test_loop_defense.py::test_model_gets_a_warning_on_the_third_repeat",
+          "tests/test_loop_defense.py::test_warning_escalates_and_tells_it_to_stop"
+        ]
+      },
+      {
+        "id": "loop-b-compare-raw-arguments",
+        "desc": "Compare the raw argument string instead of the normalised arguments. Re-asking the same question with different spacing or key order then looks like new evidence, so spinning gets recorded as broadening the search.",
+        "file": "src/rca/tools.py",
+        "find": "        return f\"{name}|{json.dumps(args, sort_keys=True, ensure_ascii=False)}\"",
+        "replace": "        return f\"{name}|{json.dumps(args, ensure_ascii=False)}\"",
+        "expect_red": [
+          "tests/test_loop_defense.py::test_signature_ignores_cosmetic_differences"
+        ]
+      },
+      {
+        "id": "loop-c-move-detection-state-onto-the-box",
+        "desc": "Put the 'what have I already asked' state on the ToolBox instead of the RunContext. Then a second box over the same context silently resets detection while repeat_calls stays 0 -- looking exactly like 'no looping'. A plausible refactor (moving `box = ToolBox(ctx)` into the loop) triggers this.",
+        "file": "src/rca/tools.py",
+        "find": "        signature = self._signature(name, args)\n        seen = self.ctx.seen_signatures",
+        "replace": "        signature = self._signature(name, args)\n        seen = self.__dict__.setdefault(\"_seen\", {})",
+        "expect_red": [
+          "tests/test_loop_defense.py::test_two_boxes_over_the_same_context_still_detect_repeats"
+        ]
+      },
+      {
+        "id": "loop-d-lose-the-looping-classification",
+        "desc": "Drop the looping branch from stop_reason, so 'spinning in place' is reported as a plain budget overrun. The two need opposite fixes: raise the budget vs change the prompt.",
+        "file": "eval/runner.py",
+        "find": "    if attempt.tool_calls >= 10 and attempt.repeat_calls / max(attempt.tool_calls, 1) >= 0.5:\n        return \"step_limit_looping\"",
+        "replace": "    if False:\n        return \"step_limit_looping\"",
+        "expect_red": [
+          "tests/test_loop_defense.py::test_stop_reason_distinguishes_looping_from_budget"
+        ]
+      },
+      {
+        "id": "guard-a-reenact-the-swallowed-function",
+        "desc": "Re-enact the exact editing accident that happened three times: drop a function's `def` line so its body is absorbed into the previous function. This is VALID Python -- ast.parse stays silent -- and the loss only surfaces as a runtime NameError. The static guard must catch it.",
+        "file": "eval/runner.py",
+        "find": "def _convergence_breakdown(report: Report) -> list[str]:\n    \"\"\"列出多 Agent 每个环节的 finished / steps",
+        "replace": "    \"\"\"列出多 Agent 每个环节的 finished / steps",
+        "expect_red": [
+          "tests/test_offline.py::test_no_undefined_names_in_the_source_tree"
+        ]
+      }
+    ]
+  },
+  "seal_checklist_integrity": {
+    "harness_log": [
+      "#25"
+    ],
+    "why": "The sealing checklist reconciles two things that can drift apart: the human claim written in docs/harness-log.md, and whether the mutation actually turns the tests red. If its parser silently reads nothing from the table, the reconciliation becomes vacuously green -- 'no declarations found, so everything is consistent'. That is precisely the failure mode the checklist exists to prevent, so the parser itself needs a proved mutation.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "seal-a-parser-reads-nothing",
+        "desc": "Make the status parser read an empty document. Every declared sealing claim then becomes invisible and the reconciliation passes for the wrong reason.",
+        "file": "scripts/seal_report.py",
+        "find": "    text = LOG_PATH.read_text(encoding=\"utf-8\")\n    out: dict[str, str] = {}",
+        "replace": "    text = \"\"\n    out: dict[str, str] = {}",
+        "expect_red": [
+          "tests/test_offline.py::test_seal_report_parses_the_declared_statuses",
+          "tests/test_offline.py::test_seal_report_reports_unbacked_claims"
         ]
       }
     ]

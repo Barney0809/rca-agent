@@ -739,8 +739,10 @@ def _knob_of(env_key: str) -> str:
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
-    field = name.lower()
-    return _KNOB_ALIASES.get(field, field)
+    # ⚠️ 变量名不要叫 `field` —— 那会遮蔽 `from dataclasses import field`
+    #    （ruff F811 会报，而且人读到这里也会有一瞬间的困惑）。
+    knob_name = name.lower()
+    return _KNOB_ALIASES.get(knob_name, knob_name)
 
 
 def _check_changes_are_resolvable(fault: Fault) -> str | None:
@@ -762,10 +764,10 @@ def _check_changes_are_resolvable(fault: Fault) -> str | None:
                 f"{fault.id} 的变更记录指向 {target}，但该故障没有给 {target} 打任何补丁。\n"
                 f"  变更日志里的条目必须对应一次**真实的**参数改动。"
             )
-        field = _knob_of(key)
-        if field not in patch:
+        knob_name = _knob_of(key)
+        if knob_name not in patch:
             return (
-                f"{fault.id} 的变更记录 {key} 推导出字段 {field!r}，"
+                f"{fault.id} 的变更记录 {key} 推导出字段 {knob_name!r}，"
                 f"但它不在 {target} 的补丁里：{sorted(patch)}\n"
                 f"  ⇒ 变更日志会写出 from/to = null（数据坏了，不是'难'）。\n"
                 f"  请修 _knob_of 的别名表，或改故障定义里的 key。"

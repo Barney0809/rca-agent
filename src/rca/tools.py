@@ -55,6 +55,27 @@ class RunContext:
     tool_calls: int = 0
     tool_log: list[dict] = field(default_factory=list)
 
+    # ★ 打转（loop）的统计（2026-09-25，D9）
+    #
+    # 为什么需要它：新任务（"列出所有异常"）下实测到一轮
+    # **14 步里调了 87 次工具、最后没产出结论**。
+    # 那 87 次里有多少是重复的、白跑的，此前**完全不可见** ——
+    # 报告只看到一个"步数 14、结论为空"，看不出是"打转"还是"在深挖"。
+    #
+    # ⇒ 把隐性浪费变成显性数字，才能判断该修的是提示词还是预算。
+    repeat_calls: int = 0          # 参数**完全相同**的重复调用次数
+    distinct_calls: int = 0        # 不同（工具 + 参数）组合的数量
+    # ⚠️ 打转检测的"已经问过什么"必须放在**上下文**上，不能放在 ToolBox 上。
+    #
+    #    理由是一条真实的脆弱性：如果状态放在 box 上，
+    #    那么"同一个 ctx 上建了两个 box"（比如有人把 `box = ToolBox(ctx)`
+    #    挪进了循环）就会让检测**静默失效** —— 而 `repeat_calls` 仍然是 0，
+    #    看起来就像"没有打转"。**一个看起来正常的 0 比一个错误更危险。**
+    #
+    #    放这儿之后语义也更准确：它记录的是"**这次诊断**已经问过哪些问题"，
+    #    与是谁问的无关。
+    seen_signatures: dict[str, int] = field(default_factory=dict)
+
     @classmethod
     def from_run_dir(
         cls,
@@ -321,7 +342,17 @@ TOOL_SPECS: list[dict] = [
 
 
 class ToolBox:
-    """统一的工具调用入口，并记录每一次调用（用于统计"步数"）。"""
+    """统一的工具调用入口，并记录每一次调用（用于统计"步数"）。
+
+    ★ 同时是**打转检测点**（D9）：工具调用只有这一个出口，
+      所以把检测放在这里，baseline 与三个专职 Agent **自动全都具备**，
+      不需要各自实现一遍。
+    """
+
+    # 第几次重复开始提醒模型（前两次不打扰：有时确实需要重查一次）
+    REPEAT_WARN_AT = 3
+    # 第几次重复开始明确要求它收手（再往后纯粹是浪费）
+    REPEAT_STOP_AT = 5
 
     def __init__(self, ctx: RunContext) -> None:
         self.ctx = ctx
@@ -329,6 +360,33 @@ class ToolBox:
     @staticmethod
     def specs() -> list[dict]:
         return TOOL_SPECS
+
+    def _signature(self, name: str, args: dict) -> str:
+        """把一次调用归一化成签名。
+
+        ⚠️ 用**解析后的参数**而不是原始字符串：模型经常把同一个查询
+           用不同的空格/键序再发一遍（`{"level":"ERROR"}` vs `{ "level" : "ERROR" }`）。
+           按原始文本比会漏掉这些 —— 而它们正是"打转"的典型样子。
+        """
+        return f"{name}|{json.dumps(args, sort_keys=True, ensure_ascii=False)}"
+
+    def _loop_note(self, signature: str) -> str:
+        """第 N 次重复调用时追加给模型的提醒。返回空字符串表示不提醒。"""
+        n = self.ctx.seen_signatures.get(signature, 0)
+        if n < self.REPEAT_WARN_AT:
+            return ""
+        if n >= self.REPEAT_STOP_AT:
+            return (
+                f"\n\n⚠️⚠️ 这是你第 {n} 次**重复**调用同一个工具、参数完全相同。"
+                f"结果不会有任何变化，继续调用只会浪费预算。\n"
+                f"    请**立刻**基于已有证据给出结论；如果证据确实不够，"
+                f"就在结论里如实说明缺什么。"
+            )
+        return (
+            f"\n\n⚠️ 这是你第 {n} 次**重复**调用同一个工具、参数完全相同，结果不会变。\n"
+            f"    请换一个查询条件（换个关键词 / 换个服务 / 换个时间粒度），"
+            f"或者基于已有证据下结论。"
+        )
 
     def call(self, name: str, arguments_json: str) -> str:
         """执行一个工具调用，返回给模型看的文本。
@@ -363,6 +421,15 @@ class ToolBox:
             self._record(name, arguments_json, ok=False)
             return f"未知工具：{name}。可用工具：{', '.join(handlers)}"
 
+        # ---- 打转统计（在真正执行之前记，重复的也算一次真实调用）----
+        # 状态存在 ctx 上而不是 box 上 —— 见 RunContext.seen_signatures 的注释
+        signature = self._signature(name, args)
+        seen = self.ctx.seen_signatures
+        seen[signature] = seen.get(signature, 0) + 1
+        self.ctx.distinct_calls = len(seen)
+        if seen[signature] > 1:
+            self.ctx.repeat_calls += 1
+
         try:
             out = fn(self.ctx, **args)
         except TypeError as exc:
@@ -373,7 +440,7 @@ class ToolBox:
             return f"工具执行出错：{type(exc).__name__}: {exc}"
 
         self._record(name, arguments_json, ok=True)
-        return out
+        return out + self._loop_note(signature)
 
     def _check_allowed(self, name: str) -> str | None:
         """权限检查。基类不限制，子类覆盖。返回 None 表示放行。"""

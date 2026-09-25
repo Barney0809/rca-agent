@@ -101,6 +101,9 @@ class Attempt:
     elapsed_s: float
     finished: bool
     parse_ok: bool
+    # ★ 打转统计（D9）：参数完全相同的重复工具调用次数。
+    #   默认为 0 —— 这样既有的 results.json 仍能被 load_report 读回。
+    repeat_calls: int = 0
     # 多 Agent 模式下的额外信息（交叉质证的改变次数、驳回项、分歧等）。
     # 默认为空 dict —— 这样既有的 results.json 仍能被 load_report 读回。
     detail: dict = field(default_factory=dict)
@@ -345,6 +348,9 @@ def _run_baseline_slice(
         elapsed_s=diag.elapsed_s,
         finished=diag.finished,
         parse_ok=diag.parse_ok,
+        # ★ 打转统计（D9）：`ctx` 就是这次 diagnose 用的上下文，
+        #   工具调用全走 ToolBox，所以计数都在它身上。
+        repeat_calls=getattr(ctx, "repeat_calls", 0),
     )
 
 
@@ -388,6 +394,7 @@ def _run_multi_slice(
         and all(c.finished for c in res.cross_exams)
         and res.verdict.parse_ok,
         parse_ok=res.verdict.parse_ok,
+        repeat_calls=res.repeat_calls,          # ★ 打转统计（D9）
         detail={
             "accepted": res.verdict.accepted,
             "n_rejected": len(res.verdict.rejected),
@@ -497,6 +504,52 @@ def _print_cause_axes(report: Report) -> None:
     print("        它回答的是「分工有没有覆盖到」，不是「谁更强」。")
 
 
+def stop_reason(attempt: Attempt) -> str:
+    """这次尝试**为什么停下来**。
+
+    ⚠️ 为什么值得单独立一个概念：`finished=False` 是个**有歧义的**布尔值。
+    它可能意味着两件完全不同的事：
+
+        在深挖，只是预算不够       → 该加预算
+        在打转，反复查同一个东西   → 加预算只会让它更贵地打转
+
+    两者的修法相反。实测证据：新任务下 baseline 有一轮 **14 步里调了 87 次工具、
+    最后没产出结论** —— 光看"步数 14、结论为空"根本分不出是哪一种。
+
+    判据用**重复调用占比**：重复调用多，说明它不是在扩证据面，而是在原地转。
+    """
+    if attempt.finished:
+        return "converged"
+    if attempt.tool_calls >= 10 and attempt.repeat_calls / max(attempt.tool_calls, 1) >= 0.5:
+        return "step_limit_looping"
+    return "step_limit"
+
+
+def _print_stop_reasons(report: Report) -> None:
+    """打印停止原因分布与打转统计。全部正常收敛时也打一行（"没问题"本身是信息）。"""
+    reasons = [stop_reason(a) for a in report.attempts]
+    loop = [r for r in reasons if r == "step_limit_looping"]
+    limited = [r for r in reasons if r == "step_limit"]
+
+    total_calls = sum(a.tool_calls for a in report.attempts)
+    total_repeat = sum(a.repeat_calls for a in report.attempts)
+
+    print()
+    print("  ── 停止原因与打转（D9）──")
+    print(f"     收敛 {reasons.count('converged')}/{len(reasons)}"
+          f"　撞预算 {len(limited)}　**疑似打转** {len(loop)}")
+    if total_calls:
+        pct = total_repeat / total_calls
+        print(f"     重复工具调用 {total_repeat}/{total_calls}（{pct:.0%}）"
+              " —— 参数**完全相同**的调用次数")
+    if loop:
+        print("     ⚠️ 有尝试疑似在打转：加预算解决不了，得改提示词或工具返回的内容")
+        for a in report.attempts:
+            if stop_reason(a) == "step_limit_looping":
+                print(f"        {a.fault_id} 第{a.round_no}轮："
+                      f"{a.steps} 步 / {a.tool_calls} 次调用，其中重复 {a.repeat_calls} 次")
+
+
 def _convergence_breakdown(report: Report) -> list[str]:
     """列出多 Agent 每个环节的 finished / steps —— 用来定位"到底是哪个环节没收敛"。
 
@@ -596,6 +649,8 @@ def print_report(report: Report) -> None:
 
     # 多故障场景额外打两轴（结论 / 召回）。单故障场景什么也不打。
     _print_cause_axes(report)
+    # 停止原因与打转统计（D9）—— 把"撞预算"和"在打转"分开
+    _print_stop_reasons(report)
 
 
 def save_report(report: Report) -> Path:
