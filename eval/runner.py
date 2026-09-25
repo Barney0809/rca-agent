@@ -206,6 +206,10 @@ class Attempt:
     trace_path: str = ""    # 多 Agent 模式下的额外信息（交叉质证的改变次数、驳回项、分歧等）。
     # 默认为空 dict —— 这样既有的 results.json 仍能被 load_report 读回。
     detail: dict = field(default_factory=dict)
+    # ★ 护栏（M2 软提醒）自己的账：审了几条、报了没有、改了几次、花了多少。
+    #   ⚠️ 与 `correct` **完全无关**（ADR-0007 决定 2）—— 摆在一起只是为了做 2×2 对照。
+    #   默认为空 dict：既有的 results.json（没有护栏）仍能被读回。
+    guard: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         # ⚠️ trace 要**排除**：它是几 MB 的原始工具返回，
@@ -348,6 +352,7 @@ def run(
     agent: str = "baseline",
     include_invalidated: bool = False,
     judge_fn=None,
+    guard: bool = False,
     verbose: bool = True,
 ) -> Report:
     cfg = LlmConfig.from_env()
@@ -380,7 +385,8 @@ def run(
     if verbose:
         print("=" * 96)
         print(f"  {agent} 评测   模型={report.model}  模式={mode}  轮数={rounds}  "
-              f"场景数={len(runs)}  最大步数={max_steps}")
+              f"场景数={len(runs)}  最大步数={max_steps}  "
+              f"护栏={'开（软提醒+一次修正）' if guard else '关'}")
         print("=" * 96)
         print()
 
@@ -412,7 +418,7 @@ def run(
 
             if agent == "multi":
                 attempt = _run_multi_slice(client, ctx, fid, rnd, score, model,
-                                           max_steps, cross_exam_steps, judge_fn)
+                                           max_steps, cross_exam_steps, judge_fn, guard=guard)
             else:
                 attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score, judge_fn)
 
@@ -486,16 +492,19 @@ def _run_multi_slice(
     max_steps: int,
     cross_exam_steps: int,
     judge_fn=None,
+    guard: bool = False,
 ) -> Attempt:
     """跑一次完整的多 Agent 流程（三轮：调查 → 交叉质证 → 裁决）。
 
     ⚠️ 步数预算与 baseline **必须一致** —— 否则就是 harness-log #13 那个坑：
        一个配置差异会被当成能力差异。
+
+    `guard=True` 时，裁决之后再跑一次**证据审查者**，并给它**一次**自我修正机会（M2）。
     """
     from rca.agents.coordinator import diagnose_multi
 
     res = diagnose_multi(client, ctx, model=model, max_steps=max_steps,
-                         cross_exam_steps=cross_exam_steps)
+                         cross_exam_steps=cross_exam_steps, guard=guard)
     verdict_text = res.verdict.root_cause
     jd = judge_detail(score, verdict_text, judge_fn)
 
@@ -530,6 +539,7 @@ def _run_multi_slice(
         and res.verdict.parse_ok,
         parse_ok=res.verdict.parse_ok,
         repeat_calls=res.repeat_calls,          # ★ 打转统计（D9）
+        guard=(res.to_dict().get("guard") or {}),   # ★ 护栏自己的账（M2）
         trace=combined_trace,                   # ★ 各环节轨迹（#29）
         detail={
             "accepted": res.verdict.accepted,
@@ -1107,6 +1117,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--include-invalidated", action="store_true",
                    help="连**已作废**的场景一起跑（结果不参与聚合）。"
                         "只在需要复现'某道题曾经出错过'时用")
+    p.add_argument("--guard", action="store_true",
+                   help="开**软提醒护栏**（M2，只对 multi 有效）：裁决后跑一次证据审查者，"
+                        "若有问题给协调者**一次**自我修正机会。"
+                        "⚠️ 审查者的输出**不参与** correct 计算 —— 开/关它才能做 2×2 对照")
     p.add_argument("--from-json", default=None,
                    help="从已保存的 results.json 重新出报告（不调用 LLM、不花钱）")
     args = p.parse_args(argv)
@@ -1145,6 +1159,7 @@ def main(argv: list[str] | None = None) -> int:
         agent=args.agent,
         include_invalidated=args.include_invalidated,
         judge_fn=_make_judge_fn() if args.judge else None,
+        guard=args.guard,
     )
     print_report(report)
     if report.attempts:

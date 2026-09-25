@@ -402,8 +402,14 @@ def adjudicate(
     exams: list[CrossExam],
     *,
     model: str | None = None,
+    extra_suffix: str = "",
 ) -> Verdict:
-    """协调者裁决。一次 LLM 调用，产出结构化结论。"""
+    """协调者裁决。一次 LLM 调用，产出结构化结论。
+
+    `extra_suffix` 只用于 M2 的**一次**自我修正：把证据审查者的意见附在
+    **同一条 user 消息**后面（不新建消息、不改系统提示）——
+    这样"有护栏 / 无护栏"两侧的差异**只**多出那段文本，2×2 对照才是干净的。
+    """
     # ⚠️ 这里**不能**传 max_tokens：`DeepSeekClient.chat()` 的签名里没有这个参数，
     #    输出长度统一由 `config.max_tokens` 决定。
     #    曾经在这里写了 `max_tokens=2048`，结果整个多 Agent 闭环跑完三个专职 Agent
@@ -414,7 +420,7 @@ def adjudicate(
     result: LlmResult = client.chat(
         messages=[
             {"role": "system", "content": COORDINATOR_PROMPT},
-            {"role": "user", "content": _format_for_coordinator(hyps, exams)},
+            {"role": "user", "content": _format_for_coordinator(hyps, exams) + extra_suffix},
         ],
         model=model,
         tools=None,          # 协调者不查数据 —— 它只裁决
@@ -470,12 +476,20 @@ class MultiAgentResult:
     denied_tool_calls: int = 0
     repeat_calls: int = 0            # ★ 打转统计（D9）
 
+    # ★ M2 软提醒（护栏）—— 这几项是**护栏自己的账**，一律不参与判定：
+    #   不参与 `correct`（ADR-0007 决定 2），也不进 root_cause 文本。
+    guard_enabled: bool = False
+    guard_review: dict = field(default_factory=dict)
+    guard_revised: bool = False
+    guard_cost_yuan: float = 0.0
+
     @property
     def total_cost_yuan(self) -> float:
         return (
             sum(h.cost_yuan for h in self.hypotheses)
             + sum(c.cost_yuan for c in self.cross_exams)
             + self.verdict.cost_yuan
+            + self.guard_cost_yuan
         )
 
     def to_dict(self) -> dict:
@@ -492,6 +506,13 @@ class MultiAgentResult:
             "total_tool_calls": self.total_tool_calls,
             "denied_tool_calls": self.denied_tool_calls,
             "cost_yuan": round(self.total_cost_yuan, 6),
+            # ★ 护栏自己的账（与判定无关，单独摆出来便于 2×2 对照）
+            "guard": {
+                "enabled": self.guard_enabled,
+                **self.guard_review,
+                "revised": self.guard_revised,
+                "guard_cost_yuan": round(self.guard_cost_yuan, 6),
+            },
             "hypotheses": [h.to_dict() for h in self.hypotheses],
             "cross_exams": [c.to_dict() for c in self.cross_exams],
             "verdict": self.verdict.to_dict(),
@@ -506,6 +527,7 @@ def diagnose_multi(
     max_steps: int = 14,
     cross_exam_steps: int = 14,
     roles: tuple[Role, ...] = ALL_ROLES,
+    guard: bool = False,
 ) -> MultiAgentResult:
     """跑完整的多 Agent 流程：三个专员 → 交叉质证 → 协调者裁决。
 
@@ -550,7 +572,37 @@ def diagnose_multi(
         out.cross_exams = list(pool.map(_exam, roles))
 
     # ---------- 第三轮：裁决 ----------
+    material = _format_for_coordinator(out.hypotheses, out.cross_exams)
     out.verdict = adjudicate(client, out.hypotheses, out.cross_exams, model=model)
+
+    # ---------- 第三轮之后：软提醒（M2，可选）----------
+    #
+    # ⚠️ 三条铁律（ADR-0007 决定 2）：
+    #   1. 只提醒、不拦：硬层才是能拦的那一层；
+    #   2. 不进判分：`correct` 只看 root_cause 文本，护栏的发现绝不参与；
+    #   3. 最多修正一次（不迭代）—— 否则成本不可控，而且第二次起就是"自己说服自己"。
+    if guard:
+        from .reviewer import build_revision_suffix, review_evidence
+
+        out.guard_enabled = True
+        review = review_evidence(client, material, out.verdict.raw_text, model=model)
+        out.guard_review = review.to_dict()
+        out.guard_cost_yuan += review.cost_yuan
+        out.n_llm_calls += 1
+        if review.issues:
+            revised = adjudicate(
+                client, out.hypotheses, out.cross_exams, model=model,
+                extra_suffix=build_revision_suffix(review.issues),
+            )
+            out.guard_cost_yuan += revised.cost_yuan
+            out.n_llm_calls += 1
+            # ⚠️ 只有修订产出**可解析**的结论才替换原文 ——
+            #    否则宁可保留第一次的结论，也不要一个半截答案（#27 的教训）。
+            if revised.parse_ok:
+                out.verdict = revised
+                out.guard_revised = True
+            else:
+                out.guard_review["revision_unparsed"] = True
 
     out.elapsed_s = time.perf_counter() - started
     out.n_llm_calls = sum(h.steps for h in out.hypotheses) + sum(

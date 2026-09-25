@@ -150,8 +150,8 @@
         "id": "wire-b-stop-passing-cross-exam-steps",
         "desc": "#17: keep the CLI flag but stop passing it down. A parameter that exists, can be set, and has no effect is equivalent to the original defect.",
         "file": "eval/runner.py",
-        "find": "    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps,\n                         cross_exam_steps=cross_exam_steps)",
-        "replace": "    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps)",
+        "find": "    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps,\n                         cross_exam_steps=cross_exam_steps, guard=guard)",
+        "replace": "    res = diagnose_multi(client, ctx, model=model, max_steps=max_steps, guard=guard)",
         "expect_red": [
           "tests/test_eval.py::test_regression_17_runner_passes_cross_exam_steps_downstream"
         ]
@@ -1451,6 +1451,57 @@
       }
     ]
   },
+  "guard_soft_review": {
+    "harness_log": [
+      "#56"
+    ],
+    "why": "#56 (M2): the soft layer is a NEW LLM call path, and the classic way a new call path hurts is that when it breaks, the whole run is wasted -- the three specialists, all cross-examinations and the adjudication have already been paid for (that is how #15 lost money). So the reviewer must be fail-safe, 'could not review' must never look like 'reviewed and found nothing', the correction is allowed exactly once (not iterated), and its output must never reach the scoring path (ADR-0007 decision 2).",
+    "tests": [
+      "tests/test_reviewer.py"
+    ],
+    "mutations": [
+      {
+        "id": "soft-a-fail-safe-narrowed-to-one-exception",
+        "desc": "Narrow the fail-safe to a single exception type, so any other error from the reviewer propagates and throws away a run whose cost was already paid.",
+        "file": "src/rca/agents/reviewer.py",
+        "find": "    except Exception as exc:                      # noqa: BLE001 —— fail-safe 是刻意的",
+        "replace": "    except TypeError as exc:",
+        "expect_red": [
+          "tests/test_reviewer.py::test_reviewer_exception_is_swallowed_and_recorded"
+        ]
+      },
+      {
+        "id": "soft-b-unparsable-review-looks-clean",
+        "desc": "Turn an unparsable review into a successful empty review -- 'could not review' silently becomes 'reviewed, no problems', the #26 empty-green failure mode.",
+        "file": "src/rca/agents/reviewer.py",
+        "find": "    if not isinstance(parsed, dict):\n        review.error = \"审查者没有返回可解析的 JSON\"\n        return review",
+        "replace": "    if not isinstance(parsed, dict):\n        review.parse_ok = True\n        return review",
+        "expect_red": [
+          "tests/test_reviewer.py::test_unparsable_review_is_an_error_not_an_empty_pass[not-json]"
+        ]
+      },
+      {
+        "id": "soft-d-issues-not-a-list-looks-clean",
+        "desc": "Same empty-green trick on the other branch: when `issues` is not an array, report a clean review instead of an error. (Measured while sealing soft-b: that mutant only breaks the 'not a dict' branch, so the '[issues-not-a-list]' case legitimately stays green -- hence this second, separate mutation.)",
+        "file": "src/rca/agents/reviewer.py",
+        "find": "    if not isinstance(raw_issues, list):\n        review.error = \"issues 字段不是数组\"\n        return review",
+        "replace": "    if not isinstance(raw_issues, list):\n        review.parse_ok = True\n        return review",
+        "expect_red": [
+          "tests/test_reviewer.py::test_unparsable_review_is_an_error_not_an_empty_pass[issues-not-a-list]"
+        ]
+      },
+      {
+        "id": "soft-c-revision-suffix-drops-the-issues",
+        "desc": "Drop the issues from the revision prompt, so the correction call is paid for but carries no information -- a silent no-op that would look like 'the guard tried'.",
+        "file": "src/rca/agents/reviewer.py",
+        "find": "    return REVISION_SUFFIX.replace(\"{issues}\", format_issues(issues))",
+        "replace": "    return REVISION_SUFFIX.replace(\"{issues}\", \"\")",
+        "expect_red": [
+          "tests/test_reviewer.py::test_revision_suffix_carries_the_issues_and_the_permission_to_disagree"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1464,7 +1515,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**275 passed / 1 skipped**",
+        "find": "**283 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1474,7 +1525,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**41 组 / 102 个变异体，全部 SEALED**",
+        "find": "**42 组 / 106 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1484,8 +1535,8 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**65 条**（其中 **54 条**由变异测试证明能变红，**11 条**",
-        "replace": "封堵清单：**99 条**（其中 **54 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**66 条**（其中 **54 条**由变异测试证明能变红，**12 条**",
+        "replace": "封堵清单：**99 条**（其中 **54 条**由变异测试证明能变红，**12 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
         ]
