@@ -1369,5 +1369,56 @@
         ]
       }
     ]
+  },
+  "status_numbers_do_not_drift": {
+    "harness_log": [
+      "#54"
+    ],
+    "why": "#54: docs/00-状态.md calls itself the single source of truth, and it had itself drifted -- all three found while auditing one hour of work: it still said '254 passed' after a test was added (real: 255), it still carried '27 groups / 60 mutants' in a D9 row (real: 39 / 91), and it still said the deliverable file had '24 passed' (real: 28). Stale numbers raise no error; they just slowly become lies -- and the project's whole pitch is that a stranger can check every number. Four mutations prove the guards are not vacuous: each of the three numbers must be readable from the authority file and must equal the measurement (pytest collection / mutations.json / the harness-log overview table), and the overview-table parser must not count the same row twice (re-enacting #37, where the page said 50 while the real count was 45).",
+    "tests": [
+      "tests/test_status_numbers.py"
+    ],
+    "mutations": [
+      {
+        "id": "status-a-doc-claims-a-wrong-test-count",
+        "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
+        "file": "docs/00-状态.md",
+        "find": "**259 passed / 1 skipped**",
+        "replace": "**999 passed / 1 skipped**",
+        "expect_red": [
+          "tests/test_status_numbers.py::test_status_test_count_matches_reality"
+        ]
+      },
+      {
+        "id": "status-b-doc-claims-wrong-mutation-counts",
+        "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
+        "file": "docs/00-状态.md",
+        "find": "**40 组 / 95 个变异体，全部 SEALED**",
+        "replace": "**38 组 / 90 个变异体，全部 SEALED**",
+        "expect_red": [
+          "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
+        ]
+      },
+      {
+        "id": "status-c-doc-claims-wrong-seal-count",
+        "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
+        "file": "docs/00-状态.md",
+        "find": "封堵清单：**64 条**（其中 **53 条**由变异测试证明能变红，**11 条**",
+        "replace": "封堵清单：**99 条**（其中 **53 条**由变异测试证明能变红，**11 条**",
+        "expect_red": [
+          "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
+        ]
+      },
+      {
+        "id": "status-d-seal-table-drops-the-last-row",
+        "desc": "Make the overview-table parser silently drop its last row (an off-by-one of the #37 family: the page then claims one fewer sealed item while looking perfectly normal). Measured twice while designing this group: neither widening the scan range nor removing the de-duplication changes the resulting set, so both of those mutants stayed GREEN and the harness refused them -- only a mutation that actually changes the count is admissible.",
+        "file": "scripts/make_demo.py",
+        "find": "        out.append((head, desc, status[:24]))\n    return out",
+        "replace": "        out.append((head, desc, status[:24]))\n    return out[:-1]",
+        "expect_red": [
+          "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
+        ]
+      }
+    ]
   }
 }
