@@ -186,6 +186,7 @@ uv run python scripts/make_replay_pack.py --out runs/_replay_pack
 | [`docs/harness-log.md`](docs/harness-log.md) | **错误封堵清单**：每一个缺陷的现象/根因/封堵/能变红的用例 |
 | [`docs/07-面试讲述稿.md`](docs/07-面试讲述稿.md) | 3 分钟 / 10 分钟讲述 + 40 分钟追问准备 |
 | [`docs/09-演示视频分镜.md`](docs/09-演示视频分镜.md) | 演示视频的分镜 / 命令 / 台词（录制前照这个准备） |
+| [`docs/10-护栏设计.md`](docs/10-护栏设计.md) | **护栏**：在 Agent 运行时看着它、提醒或拦截 —— 设计与验收形状（**判据不许看标准答案**，见 `docs/adr/0007`） |
 | `docs/adr/` | 架构决策记录 |
 
 ---
