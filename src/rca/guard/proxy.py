@@ -73,9 +73,23 @@ class GuardedToolFace:
 
     trace: Trace = field(init=False)
     submissions: list[Submission] = field(default_factory=list, init=False)
+    #: 单调递增的事件序号（**每个动作一个号**：一次工具调用+它的返回共用一个号，
+    #: 每次交卷一个号）。见 `_next_step` 的说明。
+    _step: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.trace = Trace(label=self.label)
+
+    def _next_step(self) -> int:
+        """下一个事件序号。
+
+        ⚠️ 必须**单调递增**，不能用"列表长度"推。自审时验证过：用长度推的话，
+           "交卷之后再调工具"会算出已经用过的号（实测 `[1,1,2,2,2,4]` ——
+           第二次调用撞上了第一次交卷的 2），于是**证据指针会指到错的事件上**。
+           真实 Agent 完全可能先交卷、再复查证据、再交一次。
+        """
+        self._step += 1
+        return self._step
 
     # ---------------------------------------------------------- 工具面
     def names(self) -> list[str]:
@@ -92,7 +106,7 @@ class GuardedToolFace:
            那是 #26 的同族错误（空绿）。
         """
         args = dict(args or {})
-        step = len(self.trace.calls) + 1
+        step = self._next_step()
         self.trace.add(ToolCall(step=step, name=name, args=repr(args), role="external"))
         try:
             result = self.toolbox.call(name, args)
@@ -115,7 +129,7 @@ class GuardedToolFace:
            旧稿仍然完整留档在 `submissions` 里 —— 看得见，但不参与本次判定。
         """
         text = str(text or "")
-        step = len(self.trace.calls) + len(self.submissions) + 1
+        step = self._next_step()
         self.trace.add(Claim(step=step, text=text, kind="final", phase="submit"))
 
         judged = Trace(

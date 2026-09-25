@@ -68,13 +68,20 @@ class State(TypedDict, total=False):
 
 
 def _latest_run() -> Path:
+    """找一个归档运行（只用来标注报告与核对场景号）。
+
+    ⚠️ **不能**要求它带 traces：入库的两臂只提交了 `results.json`（traces 太大、
+       核对数字用不到），要求 traces 会让**干净克隆里这个演示直接跑不起来**
+       —— 而"陌生人能复现"正是这条验收的意义。场景数据由 `--scenario` 给
+       （可以用随仓库提交的 `replay_pack/`）。
+    """
     cands = sorted(
         (d for d in (ROOT / "runs" / "_eval").glob("multi-*")
-         if (d / "results.json").exists() and any((d / "traces").glob("*.json"))),
+         if (d / "results.json").exists()),
         key=lambda p: p.stat().st_mtime,
     )
     if not cands:
-        raise SystemExit("找不到带 trace 的归档运行")
+        raise SystemExit("找不到任何归档运行（runs/_eval/multi-*/results.json）")
     return cands[-1]
 
 
@@ -175,7 +182,8 @@ async def run(*, use_llm: bool, model: str | None, fault: str, round_no: int,
     attempt = next((a for a in data["attempts"]
                     if a["fault_id"] == fault and a["round_no"] == round_no), None)
     if attempt is None:
-        raise SystemExit(f"{run_dir.name} 里没有 {fault}:{round_no}")
+        # 只是标注用 —— 场景数据由 --scenario 决定，缺这次归档不该让演示挂掉
+        print(f"  ⚠️ {run_dir.name} 里没有 {fault}:{round_no}，只用它做场景数据来源的标注")
 
     # 工具面：只读，直接架在归档场景数据上（外部 Agent 不知道也不关心数据从哪来）
     #
@@ -188,6 +196,9 @@ async def run(*, use_llm: bool, model: str | None, fault: str, round_no: int,
     scenario = Path(scenario_override) if scenario_override else discover_runs([fault]).get(fault)
     if scenario is None:
         raise SystemExit(f"找不到 {fault} 的场景目录 —— 先跑一次场景或用 --scenario 指定")
+    # 相对路径要归一化：否则后面 `relative_to(ROOT)` 会抛 ValueError（实测踩过）
+    scenario = scenario if scenario.is_absolute() else (ROOT / scenario)
+    scenario = scenario.resolve()
     ctx = RunContext.from_run_dir(scenario)
     box = ToolBox(ctx)
     face = GuardedToolFace(toolbox=box, label=f"external-agent@{run_dir.name}",

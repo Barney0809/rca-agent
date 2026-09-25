@@ -120,3 +120,34 @@ def test_tool_face_exposes_the_names_it_was_given() -> None:
     face, _ = _face()
     assert face.names() == ["query_metrics"]
     assert GuardedToolFace(toolbox=_Box(), label="x").names() == [], "没给清单时不该瞎编"
+
+
+# ---------------------------------------------------------------- 4) 证据指针必须唯一
+
+def test_steps_stay_unique_when_tools_are_called_after_a_submission() -> None:
+    """**证据指针不能撞号**（自审时发现的缺陷）。
+
+    `step` 是用来定位证据的（每条发现都带指针）。最初它是用"列表长度"推出来的，
+    于是"交卷之后再调工具"会算出**已经用过**的号 ——
+    同一个 step 对应两个事件，指针就会指到错的那个上。
+    真实 Agent 完全可能这么干（先交卷、再看一眼证据、再交一次）。
+    """
+    face, _ = _face()
+    face.call("query_metrics", {"service": "payment"})       # step 1
+    face.submit_conclusion("根因是外部风控变慢。")            # step 2
+    face.call("query_metrics", {"service": "inventory"})     # 这里曾算出 step 2（撞号）
+    face.submit_conclusion("根因是外部风控变慢（复查后）。")   # step 4
+
+    steps = [e.step for e in face.trace.events]
+    assert steps == sorted(steps), f"step 必须递增：{steps}"
+
+    from rca.guard.events import Claim as _Claim
+    from rca.guard.events import ToolCall as _ToolCall
+
+    claim_steps = {e.step for e in face.trace.events if isinstance(e, _Claim)}
+    tool_steps = {e.step for e in face.trace.events if isinstance(e, _ToolCall)}
+    # 4 个动作：2 次工具调用（各含返回）+ 2 次交卷
+    assert len(claim_steps | tool_steps) == 4, f"动作号数量不对：{sorted(claim_steps | tool_steps)}"
+    assert not (claim_steps & tool_steps), (
+        f"交卷与工具调用撞号了（指针会指错）：工具 {sorted(tool_steps)} 交卷 {sorted(claim_steps)}"
+    )
