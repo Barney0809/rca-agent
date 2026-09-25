@@ -1162,5 +1162,26 @@
         ]
       }
     ]
+  },
+  "unsupported_claim_diagnostic": {
+    "harness_log": [
+      "#44"
+    ],
+    "why": "#44: the coordinator promoted a QUIET metric with no baseline comparison (inventory stock_level, which is the normal fixture remainder) to a root cause, and simultaneously dropped the real one. I tried twice to turn that phenomenon into a number. Variant 1 ('any clause that does not match the declared truth') measured 11 for multi vs 9 for baseline -- it also counted supporting observations, so it does not discriminate: a metric that hits both sides equally is noise. Variant 2 (adding 'metric-shaped token' + 'anomaly wording') measured 4 vs 0 and LOOKED discriminating, but it worked by accident (the real texts happen to contain the word for 'water level'), and my own synthetic control case destroyed it: the realistic form {SKU-001}=998092 does not match the regex I wrote. Following the #32 precedent, I did NOT ship a misleading metric. What ships is the precise half: how many of the causes the answer ITSELF lists do not match the scenario's declared truth -- a precision diagnostic, measured at multi 11 / baseline 9, explicitly NOT a discriminator. #44 therefore stays yellow.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "unsupported1-report-nothing",
+        "desc": "Make the precision diagnostic always return nothing, so 'the conclusion listed causes that do not match the declared truth' silently stops being visible.",
+        "file": "eval/runner.py",
+        "find": "    pieces = [p.strip() for p in re.split(r\"[；;\\n]\", text) if p.strip()]\n    return [p for p in pieces if not any(c.asserted(p) for c in declared)]",
+        "replace": "    pieces = [p.strip() for p in re.split(r\"[；;\\n]\", text) if p.strip()]\n    return []",
+        "expect_red": [
+          "tests/test_eval.py::test_unsupported_cause_claims_counts_listed_but_unsupported_causes"
+        ]
+      }
+    ]
   }
 }

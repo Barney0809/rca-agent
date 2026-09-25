@@ -32,13 +32,14 @@ def _attempt(
     cost: float = 0.01,
     finished: bool = True,
     parse_ok: bool = True,
+    root_cause: str = "",
 ) -> Attempt:
     return Attempt(
         fault_id=fault_id,
         round_no=round_no,
         correct=correct,
         explanation="",
-        root_cause="",
+        root_cause=root_cause,
         steps=steps,
         tool_calls=steps * 3,
         cost_yuan=cost,
@@ -1447,6 +1448,83 @@ def test_a_dismissed_retry_claim_is_still_not_counted_as_asserted():
 
     assert keyword_verdict(denied, cause) != "asserted", (
         "把否掉的表述算成主张 —— 这正是 #16/#21 两次假阳性的机制"
+    )
+
+
+def test_unsupported_cause_claims_counts_listed_but_unsupported_causes():
+    """结论精度诊断：答案**自己列出**的原因里，有几条对不上场景真值。
+
+    ⚠️ 它**不是** #44 的检测器 —— 我试过两版都失败了，理由写在
+       `eval/runner.py::unsupported_cause_claims` 的 docstring 里：
+       第一版太钝（multi 11 vs baseline 9，把支撑性观察也算上），
+       第二版靠偶然命中（真实文本里有"水位"二字）而我的合成对照用例当场戳穿了它。
+       ⇒ 按 #32 的先例，**不采用会误导的指标**，#44 保持 🟡。
+    """
+    from eval.runner import unsupported_cause_claims
+
+    listed = _attempt(
+        fault_id="F4",
+        root_cause=(
+            "inventory 的下游重试次数被从 1 改为 5（W_INVENTORY_DOWNSTREAM_RETRIES），"
+            "把局部失败放大成请求风暴。；"
+            "inventory 的 stock_level 三个 SKU 均处于约 99.8 万的极高水平"
+            "（{SKU-001}=998092、{SKU-002}=997912），这是一个独立异常。"
+        ),
+    )
+    claims = unsupported_cause_claims(listed)
+
+    assert len(claims) == 1, f"应当只数出没对上真值的那一条，实际 {claims}"
+    assert "stock_level" in claims[0]
+
+
+def test_unsupported_cause_claims_is_quiet_on_a_single_correct_cause():
+    """干净答案必须是 0 条 —— 否则它就是个恒亮的噪声源。"""
+    from eval.runner import unsupported_cause_claims
+
+    clean = _attempt(
+        fault_id="F4",
+        root_cause=(
+            "inventory 的下游重试次数被从 1 改为 5（W_INVENTORY_DOWNSTREAM_RETRIES），"
+            "把局部失败放大成请求风暴，是本次故障的根本原因。"
+        ),
+    )
+
+    assert unsupported_cause_claims(clean) == []
+
+
+def test_unsupported_cause_claims_is_a_precision_diagnostic_not_a_discriminator() -> None:
+    """钉住它的**性质**：两侧差不多 ⇒ 它**不区分好坏**，别拿它当"谁更强"的证据。
+
+    实测：multi 11 条 / baseline 9 条。这个数字本身有用（说明"结论里夹带了别的东西"），
+    但把它当成"多 Agent 更差"的证据就是**用错工具** —— 这条用例把这件事固化下来。
+    """
+    import dataclasses
+    import json
+    from pathlib import Path
+
+    from eval.runner import Attempt, unsupported_cause_claims
+
+    root = Path(__file__).resolve().parent.parent
+    fields = {f.name for f in dataclasses.fields(Attempt)}
+
+    def total(name: str) -> int:
+        p = root / "runs" / "_eval" / name / "results.json"
+        if not p.exists():
+            pytest.skip("本机没有那份存档（runs/ 被 gitignore）")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        n = 0
+        for a in data["attempts"]:
+            n += len(unsupported_cause_claims(Attempt(**{k: v for k, v in a.items() if k in fields})))
+        return n
+
+    multi = total("multi-20260925-131953")
+    baseline = total("baseline-20260925-085629")
+
+    assert multi > 0 and baseline > 0, (
+        f"两侧都该有（multi={multi} baseline={baseline}）—— 若一侧为 0，我先前的实测结论要更新"
+    )
+    assert abs(multi - baseline) <= 6, (
+        f"两侧差距突然拉大（multi={multi} baseline={baseline}）—— 那就该重新审这个诊断量的含义"
     )
 
 

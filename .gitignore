@@ -62,6 +62,8 @@ runs/_eval/*
 !runs/_eval/baseline-20260925-085629/
 !runs/_eval/multi-20260925-112648/
 !runs/_eval/multi-20260925-131953/
+# 裁判对存档答案的逐条复核结果（#48：两把尺子在 F4 上不一致的那 2 条靠它留痕）
+!runs/_eval/_judge/
 !runs/_recordings/
 runs/_recordings/*
 !runs/_recordings/record-deepseek-flash.ndjson

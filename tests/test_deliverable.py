@@ -370,6 +370,10 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
         p = ROOT / "runs" / "_eval" / name / "results.json"
         assert p.exists(), f"定稿证据缺失：{p}（数字就没有可核对的来源了）"
 
+    # 两把尺子的逐条复核结果（#48）：丢了它，"哪条答案有口径分歧"就只剩口头说法
+    judge_ev = ROOT / "runs" / "_eval" / "_judge" / "F4.json"
+    assert judge_ev.exists(), f"裁判复核证据缺失：{judge_ev}（可用 eval/judge_archived.py 重建）"
+
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
     lines = [ln.strip() for ln in ignored.splitlines()]
 
@@ -379,6 +383,7 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     for name in ("baseline-20260925-085629", "multi-20260925-112648",
                  "multi-20260925-131953"):
         assert f"!runs/_eval/{name}/" in lines, f"{name} 的证据没有被反选进仓库"
+    assert "!runs/_eval/_judge/" in lines, "裁判复核证据没有被反选进仓库"
     assert "!runs/_recordings/record-deepseek-flash.ndjson" in lines, "录制也没进仓库"
 
     # 反选必须排在排除规则**之后**（gitignore 是后者优先）

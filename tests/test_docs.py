@@ -65,6 +65,64 @@ def test_all_relative_links_in_the_docs_resolve() -> None:
     assert not broken, "断链：\n  " + "\n  ".join(broken)
 
 
+def _norm_commands(text: str) -> str:
+    """把命令文本规范化后再比：去引号、反斜杠→/、逗号→空格、压空白、转小写。
+
+    ⚠️ 为什么需要它：`scripts/ci.ps1` 里命令是**参数数组**写法
+    （`"-m", "ruff", "check", "--select", "F821,ASYNC,F811", …`），
+    而 workflow 里是一整行 shell 命令。逐字比对必然对不上，
+    但"两边跑的是不是同一组检查"这件事仍然是可以机械核对的。
+    """
+    t = text.replace("\\", "/").replace('"', " ").replace("'", " ")
+    t = t.replace(",", " ")
+    return re.sub(r"\s+", " ", t).lower()
+
+
+def test_the_ci_workflow_and_the_local_gate_agree_on_the_core_commands() -> None:
+    """CI 与本地门禁**必须跑同一组命令** —— 否则"本地绿"就说明不了"云端会绿"。
+
+    背景：本仓库**没有 git 远程**，所以 `.github/workflows/ci.yml` 从未在 runner 上跑过，
+    能验证的只有 `scripts/ci.ps1`（本地实测 GATE PASSED）。既然"本地门禁"是唯一的
+    证据来源，那它和 workflow 就必须是**同一组命令** —— 两处各写一份、慢慢走散，
+    正是本项目 #43 记过的那个毛病（同一种知识写在两个地方）。
+
+    ⚠️ 这条检查**不能**证明 workflow 在 Linux runner 上会通过（那需要真跑一次）。
+       它能证明的是：**两边的检查项一致**。
+    """
+    raw_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    raw_local = (ROOT / "scripts" / "ci.ps1").read_text(encoding="utf-8")
+    workflow, local = _norm_commands(raw_workflow), _norm_commands(raw_local)
+
+    core_commands = (
+        "ruff check --select f821 async f811 src eval scripts tests world",
+        "pytest",
+        "mutate_check.py --verify-only",
+        "seal_report.py --skip-mutations",
+    )
+    for cmd in core_commands:
+        assert cmd in workflow, f"workflow 里少了这条门禁命令：{cmd}"
+        assert cmd in local, f"本地门禁里少了这条命令：{cmd}"
+
+    # workflow 必须把"离线"与"需要 Docker"分成两个作业 ——
+    # 否则 Docker 一抖动就会把 Agent 代码的回归掩盖掉（注释里也是这么写的）
+    assert "offline:" in raw_workflow and "world:" in raw_workflow
+    assert "--ignore=tests/test_world.py" in raw_workflow, "离线作业必须排除需要 Docker 的用例"
+    assert "--ignore=tests/test_world.py" in raw_local, "本地门禁也必须能排除它们（世界没起时）"
+
+
+def test_the_local_gate_is_pure_ascii() -> None:
+    """第 1 条守则：被解析的脚本必须纯 ASCII（Windows 上非 ASCII 会炸）。
+
+    `scripts/ci.ps1` 是新加的、又是**入口脚本**（`make ci` 调它），
+    所以这条得单独钉一下 —— 已有的 ASCII 守卫虽然覆盖 `*.ps1`，
+    但那是"扫到才算"，这里明确点名，免得将来路径规则变动把它漏掉。
+    """
+    data = (ROOT / "scripts" / "ci.ps1").read_bytes()
+    bad = [i for i, b in enumerate(data) if b > 0x7F]
+
+    assert not bad, f"scripts/ci.ps1 里有非 ASCII 字节（第 {data[:bad[0]].count(chr(10).encode()) + 1} 行起）"
+
+
 def test_every_doc_appears_in_the_agents_map() -> None:
     """`docs/` 下的每份文档都必须在 `AGENTS.md` 的文档地图里登记。
 

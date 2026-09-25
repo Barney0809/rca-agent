@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import re
 import statistics
 import sys
 from dataclasses import dataclass, field
@@ -470,6 +471,83 @@ def load_report(path: Path) -> Report:
     return report
 
 
+def unsupported_cause_claims(attempt: Attempt) -> list[str]:
+    """答案**自己列出**的原因里，**对不上场景真值**的那些（结论精度诊断）。
+
+    ⚠️ 先说清楚它**不是**什么（这是两次实测换来的结论，见 harness-log #44）：
+
+        我本来想把它做成"#44 检测器" —— 也就是自动抓出
+        「把一条**没有基线对比的**指标（如 `stock_level ≈ 99.8 万`，
+        其实是库存夹具的正常余量）当成异常/根因」这种毛病。**试了两版，都不合格**：
+
+        · 第一版："分句不匹配真值 ⇒ 记一条"。实测 **multi 11 条 vs baseline 9 条** ——
+          它把"支撑性观察"（`其下游仅 45ms，说明慢在 inventory 内部`）、
+          传播描述（`上游只是透传症状`）全算上了。**两侧都中招的指标不区分好坏。**
+        · 第二版：再加"必须含指标形状 + 异常措辞"。实测 4 vs 0，**看着能区分**，
+          但它是靠**偶然命中**（真实文本里有"水位"二字）才工作的 ——
+          我的合成对照用例当场把它戳穿：`{SKU-001}=998092` 这种真实的指标写法
+          根本匹配不上我写的正则。**一个靠偶然命中工作的检测器不能进报告。**
+
+        ⇒ 结论：**那个现象需要语义判断，纯关键词做不到。**
+          按本项目处理 #32 的先例，**不采用一个会误导的指标**；
+          #44 因此仍标 🟡（未封堵），"回去读原文"这一步保留。
+
+    它真正回答的是一个更朴素、可以**逐条复核**的问题：
+
+        **结论里列出来的原因，有几条对不上场景声明的真值？**
+
+    （实测：multi 11 条 / baseline 9 条 —— 两侧差不多，所以它**不区分好坏**，
+      只用来提醒"结论里夹带了别的东西"，别拿它当"谁更强"的证据。）
+
+    实现：结论文本就是模型自己的原因列表拼起来的（`；` 分隔，见 baseline/coordinator），
+    所以按 `；`/换行拆开就等于还原模型**自己列出的**条目 —— 这不是我发明的切分。
+    """
+    from eval.scenarios import SCENARIOS, Cause
+
+    sc = SCENARIOS.get(attempt.fault_id)
+    text = (attempt.root_cause or "").strip()
+    if sc is None or not text:
+        return []
+
+    declared = list(sc.required_causes) or [
+        Cause(name=sc.label, keyword_groups=sc.keyword_groups)
+    ]
+    pieces = [p.strip() for p in re.split(r"[；;\n]", text) if p.strip()]
+    return [p for p in pieces if not any(c.asserted(p) for c in declared)]
+
+
+def _print_unsupported_claims(report: Report) -> None:
+    """**假阳性轴**（#44）：把"没有依据的额外原因主张"打出来（有才打）。
+
+    ⚠️ 与两轴一样，它**不参与** `correct`，也不加总 —— 它是一个**诊断量**：
+       回答"结论里有没有夹带没依据的东西"，而不是"答对没有"。
+
+    ⚠️ 已知的**假阳性风险**（如实写在输出里）：某条主张如果是事故叙事的一部分
+       （例如"下游依赖不可用"），它也可能被这条轴打中。所以它是**给人看的提示**，
+       不是分数；看到就回去读原文。
+    """
+    hits = []
+    for a in report.attempts:
+        try:
+            claims = unsupported_cause_claims(a)
+        except Exception:  # noqa: BLE001 —— 诊断量坏了不该让整份报告挂掉
+            continue
+        if claims:
+            hits.append((a, claims))
+    if not hits:
+        return
+    total = sum(len(c) for _a, c in hits)
+    print()
+    print("  ── 假阳性轴（额外的、无据的原因主张）──")
+    print(f"     合计 {total} 条，出现在 {len(hits)} 次尝试里")
+    for a, claims in hits[:3]:
+        print(f"     · {a.fault_id} 第{a.round_no}轮（correct={a.correct}）：{len(claims)} 条")
+        for c in claims[:1]:
+            print(f"         {c[:110]}")
+    print("     ⚠️ 这是**诊断量，不是分数**：某条如果本就是事故叙事的一部分，也可能被打中 ——")
+    print("        看到就回去读原文，别拿它当判据。")
+
+
 def attempt_cause_axes(attempt: Attempt) -> dict[str, dict[str, bool]]:
     """两轴判定 —— 只对声明了 `required_causes` 的多故障场景有意义。
 
@@ -867,6 +945,8 @@ def print_report(report: Report) -> None:
 
     # 多故障场景额外打两轴（结论 / 召回）。单故障场景什么也不打。
     _print_cause_axes(report)
+    # 假阳性轴（#44）：答案里"把没有基线对比的指标当成异常/原因"的分句
+    _print_unsupported_claims(report)
     # 停止原因与打转统计（D9）—— 把"撞预算"和"在打转"分开
     _print_stop_reasons(report)
     # 两把尺子的交叉校验（D10）—— 没跑裁判时什么也不打
