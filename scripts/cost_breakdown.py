@@ -60,9 +60,6 @@ def main() -> int:
 
     rows = []
     for i, o in enumerate(raw):
-        if not line.strip():
-            continue
-        o = json.loads(line)
         u = (o.get("response") or {}).get("usage") or {}
         hit = int(u.get("prompt_cache_hit_tokens") or 0)
         miss = int(u.get("prompt_cache_miss_tokens") or 0)
