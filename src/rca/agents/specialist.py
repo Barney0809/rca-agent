@@ -115,6 +115,10 @@ class SpecialistAgent:
         self.max_steps = max_steps
 
     def investigate(self, ctx: RunContext) -> Hypothesis:
+        # ⚠️ 延迟导入：`contract` 反向依赖 `baseline.extract_json`，
+        #    模块级导入会形成循环。
+        from .contract import repair_messages
+
         # ⚠️ 用 fork() 拿独立计数器 —— 三个 Agent 并发跑时统计不能互相污染
         local_ctx = ctx.fork()
         box = RestrictedToolBox(
@@ -126,6 +130,7 @@ class SpecialistAgent:
             {"role": "user", "content": TASK_PROMPT},
         ]
         h = Hypothesis(role=self.role.key, name=self.role.name)
+        nudged = False      # 「JSON 催促」只做一次（见 contract.py）
         started = time.perf_counter()
         diag_cost = 0.0
 
@@ -169,6 +174,12 @@ class SpecialistAgent:
                     h.confidence = 0.0
                 h.parse_ok = True
             else:
+                # 抠不出 JSON → **先催一次**（与 baseline 同一份逻辑，见 contract.py）
+                if not nudged:
+                    nudged = True
+                    messages = repair_messages(messages, result.text)
+                    continue
+
                 h.claim = result.text.strip()
                 h.parse_ok = False
             h.finished = True

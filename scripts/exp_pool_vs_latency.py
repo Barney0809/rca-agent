@@ -110,7 +110,7 @@ from world.loadgen.main import run_load  # noqa: E402
 # 只恢复本次实验真正动过的键，别去动没碰过的参数（那会引入额外变量）。
 DEFAULTS = {
     "order": {"pool_limit": 64, "pool_acquire_timeout_ms": 2000, "leak_mb_per_req": 0.0},
-    "inventory": {"downstream_retries": 1},
+    "inventory": {"downstream_retries": 1, "slow_op_ms": 0},
     "payment": {"risk_latency_ms": 30, "risk_error_rate": 0.0},
 }
 
@@ -168,6 +168,8 @@ async def main() -> int:
                     help="inventory 调用下游的重试次数（F4 用 5；正常 1）")
     ap.add_argument("--leak-mb-per-req", type=float, default=None,
                     help="order 每次请求泄漏的 MB 数（F6 用 2；F8 用 0.5；正常 0）")
+    ap.add_argument("--slow-op-ms", type=int, default=None,
+                    help="inventory 本环节数据访问的额外延迟（F3 用 600；正常 0）")
     ap.add_argument("--concurrency", type=int, default=30)
     ap.add_argument("--max-requests", type=int, default=1500)
     ap.add_argument("--duration", type=float, default=120.0)
@@ -192,6 +194,8 @@ async def main() -> int:
     inventory_patch: dict = {}
     if args.downstream_retries is not None:
         inventory_patch["downstream_retries"] = args.downstream_retries
+    if args.slow_op_ms is not None:
+        inventory_patch["slow_op_ms"] = args.slow_op_ms
 
     patches: dict[str, dict] = {}
     if order_patch:

@@ -191,12 +191,26 @@ def test_baseline_module_is_frozen():
             那会让"改了任务"看起来像"模型变差了"
 
         ⇒ **docs/05 的全部数字随之作废，已重跑并更新。**
+
+    `f2a1f143d5bb88fe` → `ba2fe0cb321bb615`（2026-09-25，D9 收尾）
+
+        原因：**加了一次性的「JSON 催促」**（见 `src/rca/agents/contract.py`）。
+
+        新任务下 JSON 解析成功率从 100% 掉到 **67%**（21 次里 2 次没给出干净 JSON，
+        其中一次是一整段英文散文）。而解析失败时评分只能拿**未经约束的原始文本**
+        去判 —— 那里面混着模型的**推理过程**而非**结论**，
+        于是**测量口径会悄悄变松**（#16/#21 两次假阳性的根源正是这个）。
+
+        做法：抠不出 JSON 时先催一次"请只输出 JSON 对象"，最多一次。
+        三个调用点（baseline / 专职 Agent / 交叉质证）共用 `contract.py` 里的同一份逻辑。
+
+        ⇒ **docs/05 重新测量并更新。**
     """
     import hashlib
 
     path = Path(__file__).resolve().parent.parent / "src" / "rca" / "agents" / "baseline.py"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    expected = "f2a1f143d5bb88fe"
+    expected = "ba2fe0cb321bb615"
 
     assert digest == expected, (
         f"baseline.py 被改动了！\n"
@@ -496,3 +510,70 @@ def test_baseline_joins_the_list_into_the_legacy_field():
     assert '"；".join(diag.root_causes)' in src, (
         "Diagnosis.root_cause 必须由 root_causes 拼出来（评分/存档依赖它）"
     )
+
+
+# ================================================================
+# 输出契约补救：模型没吐 JSON 时催一次（D9 收尾）
+# ================================================================
+#
+# 真实退步：任务改成"列出所有异常"之后，baseline 的 JSON 解析成功率
+# 从 100% 掉到 **67%**（21 次里 2 次没给出干净 JSON，其中一次是一整段英文散文）。
+#
+# 为什么这不是"丢一次数据"那么简单：
+#   解析失败时，评分只能拿**未经约束的原始文本**去判 ——
+#   那里面混着模型的**推理过程**，而不是它的**结论**。
+#   而"推理里提过某个词"与"结论里主张某件事"是两件事 ——
+#   这正是 #16 / #21 两次假阳性的根源。
+#   ⇒ **解析失败会让测量口径悄悄变松。**
+
+
+def test_contract_detects_a_prose_answer_as_needing_repair():
+    from rca.agents.contract import needs_json_repair
+
+    assert needs_json_repair("I now have enough evidence. Issue A ...") is True
+    assert needs_json_repair('{"root_causes": ["a"], "evidence": [], "confidence": 0.6}') is False
+
+
+def test_contract_repair_messages_append_a_correction_turn():
+    """催促必须**在原对话后面追加**两轮，而不是替换掉已有的上下文。
+
+    替换会丢掉模型已经看到的全部证据 —— 那等于让它从头再来一遍。
+    """
+    from rca.agents.contract import JSON_REPAIR_NUDGE, repair_messages
+
+    original = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    out = repair_messages(original, "我写了一段散文")
+
+    assert out[: len(original)] == original, "原有消息必须原样保留"
+    assert out[-2] == {"role": "assistant", "content": "我写了一段散文"}
+    assert out[-1] == {"role": "user", "content": JSON_REPAIR_NUDGE}
+    # 催促只看格式，不许暗示结论 —— 否则就成了"引导它答对"
+    assert "根因" not in JSON_REPAIR_NUDGE
+    assert "风控" not in JSON_REPAIR_NUDGE
+
+
+def test_contract_repair_does_not_mutate_the_input():
+    """不许原地改传入的列表 —— 调用方要能自由决定用不用它。"""
+    from rca.agents.contract import repair_messages
+
+    original = [{"role": "system", "content": "s"}]
+    snapshot = list(original)
+    repair_messages(original, "prose")
+    assert original == snapshot
+
+
+def test_all_three_call_sites_share_the_same_repair_logic():
+    """三个调用点必须**共用同一份**逻辑，不许各写一遍。
+
+    复制三份迟早会走散，而"两份判定不一致"这种 bug 极难发现
+    （本项目已经因为同一类问题栽过一次 —— 见 eval/scenarios.py 的注释）。
+    """
+    from pathlib import Path as _P
+
+    root = _P(__file__).resolve().parent.parent
+    for rel in ("src/rca/agents/baseline.py",
+                "src/rca/agents/specialist.py",
+                "src/rca/agents/coordinator.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "from .contract import repair_messages" in src, f"{rel} 没接上 JSON 催促"
+        assert "repair_messages(messages, result.text)" in src, f"{rel} 没用共享的补救函数"

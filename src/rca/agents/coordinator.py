@@ -191,9 +191,12 @@ def cross_examine(
        **一个没人量过的预算数字，会悄悄变成结论的一部分。**
        所以这里不留默认值：要么显式传，要么报错。
     """
+    # ⚠️ 延迟导入：contract 反向依赖 baseline.extract_json
+    from .contract import repair_messages
+
     local_ctx = ctx.fork()
     box = RestrictedToolBox(local_ctx, frozenset({role.tool}), role=role.key)
-
+    nudged = False      # 「JSON 催促」只做一次（见 contract.py）
     messages: list[dict] = [
         {"role": "system", "content": role.system_prompt},
         {
@@ -244,6 +247,12 @@ def cross_examine(
             x.why_changed = str(parsed.get("why_changed", "") or "")
             x.parse_ok = True
         else:
+            # 抠不出 JSON → **先催一次**（与 baseline / specialist 同一份逻辑，见 contract.py）
+            if not nudged:
+                nudged = True
+                messages = repair_messages(messages, result.text)
+                continue
+
             x.revised_claim = result.text.strip()
         x.finished = True
         break

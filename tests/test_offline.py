@@ -481,6 +481,39 @@ def test_no_undefined_names_in_the_source_tree():
     )
 
 
+def test_no_blocking_calls_inside_async_functions():
+    """静态检查：异步函数里不许出现阻塞调用（ASYNC 家族）。
+
+    ⚠️ 这一条对本项目**特别要紧**：被诊断系统的三个服务全是 async 处理器，
+    而本项目最依赖的观测量就是**延迟**。
+    在 async 函数里调用 `time.sleep` / 阻塞式 HTTP，
+    会**卡住整个事件循环** —— 于是：
+      · 所有在途请求一起变慢（看起来像"池耗尽"或"下游变慢"）
+      · 而且这种变慢**不反映任何被注入的故障**
+    ⇒ 它会直接伪造出一个不存在的故障，或者掩盖一个真实的故障。
+
+    实测：全仓库只有一处（`inject_fault.py` 场景末尾等日志落盘），
+    已改成 `await asyncio.sleep`。`world/` 里当时是干净的。
+    """
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", ".", "--select", "ASYNC", "--no-cache"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode == 0, (
+        "异步函数里出现了阻塞调用 —— 它会卡住事件循环，"
+        "从而**伪造出延迟类故障或掩盖真实故障**：\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+
+
 def test_the_undefined_name_check_actually_catches_something(tmp_path):
     """元测试：确认上面那条不是"ruff 没跑起来"造成的假绿。
 
@@ -629,8 +662,8 @@ def test_seal_report_can_still_detect_an_unbacked_claim():
 #   #8（F4 完全没效果）三条，**只有 Docker 集成测试**：
 #
 #       tests/test_world.py::test_regression_5_stock_is_not_drained
-#       tests/test_world.py::test_loadgen_respects_max_requests
-#       tests/test_world.py::test_f4_retry_storm_multiplies_downstream_traffic
+#       tests/test_world.py::test_regression_7_loadgen_respects_max_requests
+#       tests/test_world.py::test_regression_8_f4_retry_storm_multiplies_downstream_traffic
 #
 #   而副本变异**在原理上验证不了它们**：集成测试打的是**正在运行的容器**，
 #   容器里跑的是真实源码，不是变异副本。所以"改代码 → 用例变红"这条路走不通。

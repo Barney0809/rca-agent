@@ -212,7 +212,7 @@ async def test_f2_does_exhaust_pool_and_show_503(clean_world):
 # 回归：loadgen 必须遵守请求数上限
 # ================================================================
 
-async def test_loadgen_respects_max_requests(clean_world):
+async def test_regression_7_loadgen_respects_max_requests(clean_world):
     """回归 —— loadgen 曾经**超发 53%**（目标 1200，实发 1841）。
 
     历史：上限只在监控循环里检查，而那个循环每 5 秒才醒一次。
@@ -251,7 +251,7 @@ async def test_loadgen_respects_max_requests(clean_world):
 # 回归：F4 必须真的把流量放大到下游
 # ================================================================
 
-async def test_f4_retry_storm_multiplies_downstream_traffic(clean_world):
+async def test_regression_8_f4_retry_storm_multiplies_downstream_traffic(clean_world):
     """回归 —— F4 第一版**完全没效果**（5xx=0，与基线一模一样）。
 
     历史：F4 只改了 inventory 的重试次数（1 → 5）。

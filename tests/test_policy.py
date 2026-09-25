@@ -329,7 +329,7 @@ def test_grant_does_not_cover_other_paths(engine: PolicyEngine, workspace: Path)
     assert victim_out.exists()
 
 
-def test_regression_grant_with_relative_prefix_still_covers(engine: PolicyEngine, workspace: Path):
+def test_regression_9_grant_with_relative_prefix_still_covers(engine: PolicyEngine, workspace: Path):
     """回归 —— **授权用相对路径前缀时会静默失效**。
 
     历史：第一版 `grant()` 直接存 `str(path_prefix)`。调用方传相对路径时，
@@ -359,7 +359,7 @@ def test_regression_grant_with_relative_prefix_still_covers(engine: PolicyEngine
     assert d.quarantine_id
 
 
-def test_restore_with_missing_id_is_a_clean_denial_not_a_crash(engine: PolicyEngine):
+def test_regression_10_restore_with_missing_id_is_a_clean_denial_not_a_crash(engine: PolicyEngine):
     """回归 —— 被拒的删除会给出 quarantine_id=None，还原时不能让内部崩掉。
 
     历史：restore(None) 把 None 交给了正则，抛 TypeError ——

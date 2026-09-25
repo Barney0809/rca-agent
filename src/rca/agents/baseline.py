@@ -212,6 +212,10 @@ class BaselineAgent:
         self.max_steps = max_steps
 
     def diagnose(self, ctx: RunContext) -> Diagnosis:
+        # ⚠️ 延迟导入：`contract` 反向依赖本模块的 `extract_json`，
+        #    模块级导入会形成循环。
+        from .contract import repair_messages
+
         box = ToolBox(ctx)
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -219,6 +223,7 @@ class BaselineAgent:
         ]
 
         diag = Diagnosis()
+        nudged = False      # 「JSON 催促」只做一次
         started = time.perf_counter()
 
         for step in range(1, self.max_steps + 1):
@@ -266,7 +271,20 @@ class BaselineAgent:
                     diag.confidence = 0.0
                 diag.parse_ok = True
             else:
-                # 抠不出 JSON：整段文本当作结论，并标记 parse_ok=False
+                # ---- 抠不出 JSON：**先催一次**，不要直接就收 ----
+                #
+                # 为什么值得多花一次调用：解析失败时，评分只能拿
+                # **未经约束的原始文本**去判 —— 那里面混着模型的**推理过程**，
+                # 而不是它的**结论**。而"推理里提过某个词"与"结论里主张某件事"
+                # 是两件事（#16/#21 两次假阳性的根源）。
+                # ⇒ 解析失败会**让测量口径悄悄变松**，不只是"丢一次数据"。
+                #
+                # 最多催一次（`nudged`），之后按原样接受，避免在格式上无限纠缠。
+                if not nudged:
+                    nudged = True
+                    messages = repair_messages(messages, result.text)
+                    continue
+
                 diag.root_cause = result.text.strip()
                 diag.parse_ok = False
             diag.finished = True

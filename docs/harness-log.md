@@ -162,6 +162,7 @@ FAIL langchain_core  ...
 | **#24** | **打转不可见**：14 步 87 次工具调用，分不清"深挖"还是"原地转" | ✅ | ✅ 10 条 | ✅ 变异测试（4 个变异体） | 🟢 **已封堵** |
 | **#25** | **变异体会过期**：源码重构后查找串失配，它却一直"假装通过" | ✅ | ✅ 3 条（对账工具） | ✅ 变异测试 | 🟢 **已封堵** |
 | **#26** | **#2~#13 的封堵声明没有被机器校验**（只有手工验证） | ✅ | ✅ 3 条（离线结构守卫） | ✅ 变异测试（5 组 11 个变异体） | 🟢 **已封堵** |
+| **#27** | **JSON 解析率从 100% 掉到 67%** → 评分开始拿**原始推理文本**判分 | ✅ | ✅ 4 条 | ⬜（离线可测，待补） | 🟡 **代码已修，用例已加，变异待补** |
 
 > ### ✅ 2026-09-25：**全部"已封堵"声明现在都有变异组背书**
 >
@@ -606,7 +607,7 @@ while not stop.is_set() and time.perf_counter() < deadline:
 
 ### 回归用例
 
-- `tests/test_world.py::test_loadgen_respects_max_requests`
+- `tests/test_world.py::test_regression_7_loadgen_respects_max_requests`
   故意把监控循环调到 30 秒才醒一次 —— 若 worker 不自己检查，必然超发
 
 ### 状态
@@ -651,7 +652,7 @@ F4 必须**同时**具备两个条件：
 
 ### 回归用例
 
-- `tests/test_world.py::test_f4_retry_storm_multiplies_downstream_traffic`
+- `tests/test_world.py::test_regression_8_f4_retry_storm_multiplies_downstream_traffic`
   断言：**每个请求平均引发的下游调用数 > 1.3**
   （若重试没被触发，这个值会接近 1.0）
 
@@ -710,7 +711,7 @@ path_prefix=str(Path(path_prefix).resolve(strict=False)),
 
 ### 回归用例
 
-- `tests/test_policy.py::test_regression_grant_with_relative_prefix_still_covers`
+- `tests/test_policy.py::test_regression_9_grant_with_relative_prefix_still_covers`
   **刻意传相对路径前缀** —— 与其它用例的绝对路径形成对照
 
 ### 状态
@@ -763,7 +764,7 @@ if not quarantine_id or not isinstance(quarantine_id, str):
 
 ### 回归用例
 
-- `tests/test_policy.py::test_restore_with_missing_id_is_a_clean_denial_not_a_crash`
+- `tests/test_policy.py::test_regression_10_restore_with_missing_id_is_a_clean_denial_not_a_crash`
   （`None` / `""` / `123` 三种输入都要得到干净的拒绝，且拒绝进审计）
 
 ### 状态
@@ -1938,10 +1939,10 @@ Python 不要求缩进回退，所以 4 空格缩进的旧函数体紧接着新�
    `historical_eval_metrics`（#11 #12 #13 #22）
 
    ⚠️ 值得记一笔：**#9/#10 的用例名里没有编号**
-   （`test_regression_grant_with_relative_prefix_still_covers`、
-     `test_restore_with_missing_id_is_a_clean_denial_not_a_crash`），
-   **#7/#8 的用例也没有**（`test_loadgen_respects_max_requests`、
-   `test_f4_retry_storm_multiplies_downstream_traffic`）。
+   （`test_regression_9_grant_with_relative_prefix_still_covers`、
+     `test_regression_10_restore_with_missing_id_is_a_clean_denial_not_a_crash`），
+   **#7/#8 的用例也没有**（`test_regression_7_loadgen_respects_max_requests`、
+   `test_regression_8_f4_retry_storm_multiplies_downstream_traffic`）。
    所以"按 `regression_N` 搜用例"这个动作**搜不全** —— 表格里的"✅ 1 条"是对的，
    但**命名约定没有贯彻**。这也是它们一直没被机器校验的原因之一。
 
@@ -1972,6 +1973,78 @@ Python 不要求缩进回退，所以 4 空格缩进的旧函数体紧接着新�
 > 前者是**一次性的信念**，后者是**可持续的证据**。
 > 13 条声明从"我记得当时验过了"变成"随时可以再验一遍"，
 > 这是 D9 真正交付的东西。
+
+---
+
+## #27　JSON 解析率从 100% 掉到 67% —— 而它悄悄放宽了测量口径
+
+**日期**：2026-09-25（D9 收尾）
+**损失**：无金钱损失，但**测量口径被悄悄放宽了**（比丢数据严重）
+
+### 现象
+
+任务改成"列出**所有**异常及其根因"之后，重跑 baseline：
+
+```
+收敛率 100%   JSON 解析成功率 67%
+```
+
+21 次里 2 次没给出干净 JSON，其中一次的原文是一整段英文散文：
+
+> I now have enough evidence. Let me finalize the analysis.
+> **Issue A — External risk control unavailable ...**
+
+### 为什么这比"丢一次数据"严重
+
+解析失败时，代码把**整段原始文本**当作结论：
+
+```python
+diag.root_cause = result.text.strip()
+diag.parse_ok = False
+```
+
+而那段文本里混着模型的**推理过程**，不是它的**结论**。
+
+**"推理里提到过某个词" 和 "结论里主张某件事" 是两件事** ——
+这正是 #16 与 #21 两次假阳性的根源。
+所以"解析失败"不是丢一条数据，而是**让评分换了一把更松的尺子**，
+而且**它不会报错**。
+
+### 封堵
+
+抠不出 JSON 时**先催一次**（最多一次）：
+
+```
+模型给出最终回复 → 抠不出 JSON
+   → 追加"你上一条不是合法 JSON，请只输出 JSON 对象本身"
+   → 再给一次机会；仍失败才按原样接受
+```
+
+三个调用点（baseline / 专职 Agent / 交叉质证）**共用同一份逻辑**
+（`src/rca/agents/contract.py`）—— 复制三份迟早会走散，
+而"两份判定不一致"这种 bug 极难发现（本项目已经栽过一次）。
+
+⚠️ 催促语**只说格式、不提内容**：`JSON_REPAIR_NUDGE` 里不含"根因""风控"这类词，
+否则就成了"引导它答对"，那是在作弊。**有用例专门守这一条。**
+
+### 结果
+
+| | 修之前 | 修之后 |
+|---|---|---|
+| JSON 解析成功率 | **67%** | **100%** |
+| 准确率 | 100% | 100% |
+| 步数 | 7.5 | 8.3 |
+| 成本 / 次 | ¥0.0165 | ¥0.0172 |
+
+> 代价如实记：只在解析失败时才多花一次调用，所以步数与成本略有上升。
+> **这是"把尺子收紧"的成本，值得付。**
+
+### 状态
+
+- [x] 已修：三个调用点接上共享的催促逻辑
+- [x] 用例：4 条（检出散文 / 追加而非替换 / 不原地改入参 / 三个调用点共用同一逻辑）
+- [ ] **变异体：待补** —— 断掉催促之后用例必须变红（表格里如实标为未完成）
+- [x] `baseline.py` 指纹已更新（理由写在用例 docstring 里），baseline 已重跑
 
 ---
 

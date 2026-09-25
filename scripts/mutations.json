@@ -450,7 +450,7 @@
         "find": "            path_prefix=str(Path(path_prefix).resolve(strict=False)),",
         "replace": "            path_prefix=str(path_prefix),",
         "expect_red": [
-          "tests/test_policy.py::test_regression_grant_with_relative_prefix_still_covers"
+          "tests/test_policy.py::test_regression_9_grant_with_relative_prefix_still_covers"
         ]
       },
       {
@@ -460,7 +460,7 @@
         "find": "        if not quarantine_id or not isinstance(quarantine_id, str):",
         "replace": "        if False:",
         "expect_red": [
-          "tests/test_policy.py::test_restore_with_missing_id_is_a_clean_denial_not_a_crash"
+          "tests/test_policy.py::test_regression_10_restore_with_missing_id_is_a_clean_denial_not_a_crash"
         ]
       }
     ]

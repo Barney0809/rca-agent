@@ -639,7 +639,14 @@ async def _run_scenario(
         if fault:
             revert_patches(client, fault)
             print("      已恢复默认")
-        time.sleep(2)   # 等最后几行日志落盘
+        # ⚠️ 用 `await asyncio.sleep` 而不是 `time.sleep`：
+        #    这是 async 函数，阻塞式 sleep 会**卡住事件循环**。
+        #    这里（场景末尾等日志落盘）其实怎么睡都不影响测量，
+        #    但保留一个"异步函数里阻塞"的先例很危险 ——
+        #    同样的写法一旦出现在 async 请求处理器里，就会**直接污染延迟数字**，
+        #    而延迟正是本项目最依赖的观测量。
+        #    所以这里改对，并且把 ASYNC251 纳入静态门禁（见 test_offline.py）。
+        await asyncio.sleep(2)   # 等最后几行日志落盘
         logs_after = count_log_lines()
         log_counts = capture_logs(run_dir, started_at)
         print("      已抓指标快照 after；已抓日志："
