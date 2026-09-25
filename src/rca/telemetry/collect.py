@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import subprocess
@@ -79,11 +80,24 @@ def collect_logs(
 
 
 def _read_log_text(run_dir: Path | None, service: str) -> str:
-    """按优先级取某个服务的日志文本。"""
+    """按优先级取某个服务的日志文本。
+
+    优先级：`<service>.log` → `<service>.log.gz` → docker compose logs。
+
+    `.log.gz` 是**重放包**的存放形式（2026-09-25，D19）：
+    压缩比实测约 9:1（7 个场景 24.9 MB → 2.7 MB），
+    而“陌生人零成本重放”必须把场景数据一起发出去。
+    ⚠️ 两种形式**内容必须逐字节一致** —— 否则 key 哈希就对不上，
+       重放会 miss。这一点有回归用例（tests/test_replay_pack.py）。
+    """
     if run_dir is not None:
         captured = run_dir / "logs" / f"{service}.log"
         if captured.exists():
             return captured.read_text(encoding="utf-8", errors="replace")
+        packed = run_dir / "logs" / f"{service}.log.gz"
+        if packed.exists():
+            with gzip.open(packed, "rt", encoding="utf-8", errors="replace") as fh:
+                return fh.read()
 
     # 兜底：直接问 docker（累计日志）
     try:

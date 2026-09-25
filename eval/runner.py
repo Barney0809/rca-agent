@@ -22,7 +22,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import statistics
 import sys
@@ -49,18 +51,89 @@ RUNS_DIR = ROOT / "runs"
 
 
 # ================================================================
+# 数据根目录：本机 runs/ vs 便携重放包
+# ================================================================
+#
+# 为什么需要这一层（2026-09-25，D19）：
+#
+# 录制里的 key 是 (tag, model, messages) 的哈希，而 **tag 里嵌着场景目录名**
+# （例如 specialist/metrics/r-20260925-072345）。
+# 场景目录名是一次注入产生的时间戳 ⇒ **换一次场景目录，key 必然不同**。
+#
+# 实测过：拿旧的录制去重放新生成的场景，第一步就 miss
+# （runs/_replay_probe.log 的报错原文）。
+#
+# ⇒ “零成本重放”成立的前提不是“有录制文件”，而是
+#   **录制 + 同一批场景目录（同名同内容）**。
+#   后者有 24.9 MB 原始日志，所以做成压缩包：RCA_REPLAY_ROOT 指过去。
+
+
+def data_root() -> Path:
+    """场景数据与录制的根目录。
+
+    默认就是 `runs/`；设置 `RCA_REPLAY_ROOT` 时指向便携重放包。
+
+    ⚠️ 只影响**读**（场景发现 + 录制文件）。评测结果仍然写回
+       `runs/_eval/`，这样重放包始终是只读的、不会被跑脏。
+    """
+    raw = os.environ.get("RCA_REPLAY_ROOT", "").strip()
+    return Path(raw) if raw else RUNS_DIR
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_replay_pack(root: Path) -> dict:
+    """重放包自检：清单在、清单里的文件都在、哈希都对得上。
+
+    为什么要自检：重放的价值全押在“同一批数据”上。如果包里少一个场景
+    或某个日志被改过，key 就会 miss —— 而 miss 在 replay 模式下会抛错，
+    看起来像“模型/代码出了问题”，实际是**包坏了**。
+    所以先验包，把“包坏了”和“真的对不上”分开。
+    """
+    manifest_path = root / "pack.json"
+    if not manifest_path.exists():
+        raise RuntimeError(
+            f"重放包缺少清单：{manifest_path}\n"
+            f"  用 scripts/make_replay_pack.py 生成，或去掉 RCA_REPLAY_ROOT。"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    bad: list[str] = []
+    for rel, want in sorted(manifest.get("files", {}).items()):
+        p = root / rel
+        if not p.exists():
+            bad.append(f"缺失 {rel}")
+            continue
+        got = sha256_file(p)
+        if got != want:
+            bad.append(f"内容不一致 {rel}（清单 {want[:12]}… 实际 {got[:12]}…）")
+    if bad:
+        raise RuntimeError(
+            "重放包已损坏，拒绝在它上面跑（否则会把『包坏了』误报成『对不上』）：\n  "
+            + "\n  ".join(bad)
+        )
+    return manifest
+
+
+# ================================================================
 # 场景发现
 # ================================================================
 
 def discover_runs(fault_ids: list[str] | None = None) -> dict[str, Path]:
-    """在 runs/ 下找出每种故障**最新**的一次场景。
+    """在数据根目录下找出每种故障**最新**的一次场景。
 
     同一个故障可能跑过很多次（调试、变异测试等），取最新的一次。
     """
     found: dict[str, tuple[float, Path]] = {}
-    if not RUNS_DIR.exists():
+    root = data_root()
+    if not root.exists():
         return {}
-    for d in RUNS_DIR.iterdir():
+    for d in root.iterdir():
         if not d.is_dir() or d.name.startswith("_"):
             continue
         scen = d / "scenario.json"
@@ -258,8 +331,11 @@ def run(
 ) -> Report:
     cfg = LlmConfig.from_env()
     recorder = None
+    if os.environ.get("RCA_REPLAY_ROOT", "").strip():
+        # 用重放包之前先验包：把「包坏了」和「真的没命中」分开。
+        verify_replay_pack(data_root())
     if mode in ("record", "replay"):
-        rec_path = RUNS_DIR / "_recordings" / f"{mode}-{model or cfg.model_cheap}.ndjson"
+        rec_path = data_root() / "_recordings" / f"{mode}-{model or cfg.model_cheap}.ndjson"
         recorder = Recorder(rec_path, mode="record" if mode == "record" else "replay")
 
     client = DeepSeekClient(cfg, recorder=recorder)

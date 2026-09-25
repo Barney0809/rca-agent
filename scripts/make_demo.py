@@ -75,12 +75,22 @@ def latest(pattern: str) -> Path | None:
        （自检脚本当场抓到：页面上找不到 ¥0.0172。）
 
     ⇒ 按**尝试数**取最大的那个；并列时按名字取最后。
+
+    ⚠️ 还要**跳过 `mode=replay` 的存档**（2026-09-25，D19）。
+    回放按定义每次给出完全一样的结果（那正是它的用途），
+    所以它**不是一次测量** —— 拿它当"最完整的一次运行"，
+    等于把页面上的准确率/成本换成一次复读。
+    实测：跑通回放后（21 次尝试、成本是按录制 token 折算的 ¥1.5898），
+    页面的数字立刻被它顶掉了，交付页"可从存档复现"当场变红。
     """
     best: tuple[int, str, Path] | None = None
     for f in EVAL_DIR.glob(pattern):
         try:
-            n = len(json.loads(f.read_text(encoding="utf-8"))["attempts"])
+            data = json.loads(f.read_text(encoding="utf-8"))
+            n = len(data["attempts"])
         except Exception:  # noqa: BLE001
+            continue
+        if str(data.get("mode") or "").strip() == "replay":
             continue
         cand = (n, f.parent.name, f)
         if best is None or cand[:2] > best[:2]:
