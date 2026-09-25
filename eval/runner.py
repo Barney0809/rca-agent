@@ -392,6 +392,7 @@ def run(
     include_invalidated: bool = False,
     judge_fn=None,
     guard: bool = False,
+    batch: str = "",
     verbose: bool = True,
 ) -> Report:
     cfg = LlmConfig.from_env()
@@ -403,7 +404,11 @@ def run(
         verify_replay_pack(data_root())
     if mode in ("record", "replay"):
         rec_path = data_root() / "_recordings" / f"{mode}-{model or cfg.model_cheap}.ndjson"
-        recorder = Recorder(rec_path, mode="record" if mode == "record" else "replay")
+        # ★ batch（D19 补完）：录的时候标上"这次运行属于哪一批"，
+        #   回放时指定同一批 ⇒ **复现的是那一次运行**，而不是"录制里最后一次"。
+        recorder = Recorder(
+            rec_path, mode="record" if mode == "record" else "replay", batch=batch
+        )
 
     client = DeepSeekClient(cfg, recorder=recorder)
     runs = discover_runs(fault_ids)
@@ -425,7 +430,8 @@ def run(
         print("=" * 96)
         print(f"  {agent} 评测   模型={report.model}  模式={mode}  轮数={rounds}  "
               f"场景数={len(runs)}  最大步数={max_steps}  "
-              f"护栏={'开（软提醒+一次修正）' if guard else '关'}")
+              f"护栏={'开（软提醒+一次修正）' if guard else '关'}"
+              + (f"  批次={batch}（{'录' if mode == 'record' else '回放'}）" if batch else ""))
         print("=" * 96)
         print()
 
@@ -1181,6 +1187,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="开**软提醒护栏**（M2，只对 multi 有效）：裁决后跑一次证据审查者，"
                         "若有问题给协调者**一次**自我修正机会。"
                         "⚠️ 审查者的输出**不参与** correct 计算 —— 开/关它才能做 2×2 对照")
+    p.add_argument("--batch", default="",
+                   help="给这次运行标一个**批次名**（record 时写入录制，replay 时只认这一批）。"
+                        "没标批次的录制行为不变；标了批次就**绝不**串用别的批次")
     p.add_argument("--from-json", default=None,
                    help="从已保存的 results.json 重新出报告（不调用 LLM、不花钱）")
     args = p.parse_args(argv)
@@ -1220,6 +1229,7 @@ def main(argv: list[str] | None = None) -> int:
         include_invalidated=args.include_invalidated,
         judge_fn=_make_judge_fn() if args.judge else None,
         guard=args.guard,
+        batch=args.batch,
     )
     print_report(report)
     if report.aborted_reason:

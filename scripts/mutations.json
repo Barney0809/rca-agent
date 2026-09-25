@@ -1543,6 +1543,47 @@
       }
     ]
   },
+  "recording_batches": {
+    "harness_log": [
+      "#53"
+    ],
+    "why": "#53 follow-up (D19 'one recording = one run'): the recording file is append-only and the same key gets written by every later run, so the old 'last writer wins' index meant a replay reproduced whichever run happened to be recorded last -- measured: same responses, archived verdict 19/21, replay 21/21, and 13 of 21 attempts differed in step count. Batches fix that: record with a batch name, replay with the same name, and an unknown batch must MISS rather than silently borrow another batch's response (borrowing would disguise 'reproduced a different run' as 'reproduced this one', with no error anywhere).",
+    "tests": [
+      "tests/test_recording_batches.py"
+    ],
+    "mutations": [
+      {
+        "id": "batch-a-lookup-ignores-the-batch",
+        "desc": "Ignore the requested batch when picking a candidate, so a replay silently returns whichever batch was recorded last -- the pre-fix behaviour.",
+        "file": "src/rca/llm/recording.py",
+        "find": "        if self.batch:",
+        "replace": "        if False:",
+        "expect_red": [
+          "tests/test_recording_batches.py::test_each_batch_replays_its_own_response"
+        ]
+      },
+      {
+        "id": "batch-b-borrow-another-batch-on-miss",
+        "desc": "Fall back to any batch when the requested one has no such entry -- silent cross-batch borrowing, which makes 'this batch is incomplete' indistinguishable from 'this batch reproduced exactly'.",
+        "file": "src/rca/llm/recording.py",
+        "find": "            return exact[-1] if exact else None",
+        "replace": "            return exact[-1] if exact else candidates[-1]",
+        "expect_red": [
+          "tests/test_recording_batches.py::test_unknown_batch_misses_instead_of_borrowing_another"
+        ]
+      },
+      {
+        "id": "batch-c-batch-name-not-written",
+        "desc": "Stop writing the batch name into the recording, so replay-by-batch can never match anything.",
+        "file": "src/rca/llm/recording.py",
+        "find": "            \"batch\": self.batch,",
+        "replace": "            \"batch\": \"\",",
+        "expect_red": [
+          "tests/test_recording_batches.py::test_batch_is_written_into_the_recording"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1556,7 +1597,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**290 passed / 1 skipped**",
+        "find": "**295 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1566,7 +1607,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**43 组 / 109 个变异体，全部 SEALED**",
+        "find": "**44 组 / 112 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"

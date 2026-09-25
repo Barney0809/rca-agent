@@ -38,18 +38,31 @@ class Recorder:
     文件格式：一行一个 JSON，每行含 key + 请求摘要 + 完整响应。
     """
 
-    def __init__(self, path: Path, *, mode: str = "auto") -> None:
+    def __init__(self, path: Path, *, mode: str = "auto", batch: str = "") -> None:
         """
         mode:
             "record" —— 只录，不查（用于首次生成录制）
             "replay" —— 只查，不录；没命中就报错（用于保证可复现）
             "auto"   —— 先查，未命中则真实调用并录下来（默认，最省心）
+
+        batch（2026-09-25，D19 补完「一批录制 = 一次运行」）：
+            本次运行属于哪一批。**留空 = 未标注**（旧文件的语义，行为完全不变）。
+
+            为什么需要它：录制文件是**追加**的，同一个 key 会被后来的运行反复写入。
+            原来"后写者胜"意味着——**回放复现的是录制里最后一次运行**，
+            而不是你想复现的那一次（实测过：同一批响应下，归档判 19/21、回放判 21/21，
+            21 次尝试里 13 次步骤数不同）。
+
+            ⇒ 录的时候标上批次，回放的时候**指定同一批次**：
+              指定了就只认它（找不到就报未命中，**绝不**退而用别的批次）。
         """
         if mode not in ("record", "replay", "auto"):
             raise ValueError(f"未知的录制模式：{mode}")
         self.path = path
         self.mode = mode
-        self._index: dict[str, dict] = {}
+        self.batch = batch
+        # key → 命中该 key 的所有条目（**可能来自不同批次**，所以是一个列表）
+        self._index: dict[str, list[dict]] = {}
         self._hits = 0
         self._misses = 0
         self._load()
@@ -68,7 +81,20 @@ class Recorder:
                 continue
             key = rec.get("key")
             if key:
-                self._index[key] = rec
+                self._index.setdefault(key, []).append(rec)
+
+    def _pick(self, candidates: list[dict]) -> dict | None:
+        """从同一个 key 的多个条目里挑一个。
+
+        ⚠️ 指定了批次**只**认那个批次：找不到就返回 None（调用方按未命中处理）。
+           绝不能"退而用别的批次" —— 那等于静默串批，又回到了修复前的毛病。
+        """
+        if not candidates:
+            return None
+        if self.batch:
+            exact = [r for r in candidates if str(r.get("batch") or "") == self.batch]
+            return exact[-1] if exact else None
+        return candidates[-1]        # 未指定批次：保持旧行为（后写者胜）
 
     @staticmethod
     def make_key(*, tag: str, model: str, messages: list[dict]) -> str:
@@ -91,14 +117,16 @@ class Recorder:
         if self.mode == "record":
             return None
         key = self.make_key(tag=tag, model=model, messages=messages)
-        rec = self._index.get(key)
+        rec = self._pick(self._index.get(key, []))
         if rec is None:
             self._misses += 1
             if self.mode == "replay":
+                which = f"，批次={self.batch!r}" if self.batch else ""
                 raise RuntimeError(
-                    f"回放模式下未命中录制（tag={tag!r}, model={model!r}）。\n"
+                    f"回放模式下未命中录制（tag={tag!r}, model={model!r}{which}）。\n"
                     f"  这说明这次请求的输入与录制时不同 —— 可能是 prompt 改了，\n"
-                    f"  也可能是场景数据变了。若确实该有新输入，请用 auto 模式重录。"
+                    f"  也可能是场景数据变了；指定了批次时，还可能是**这一批里没有这条**。\n"
+                    f"  若确实该有新输入，请用 auto 模式重录。"
                 )
             return None
         self._hits += 1
@@ -111,16 +139,19 @@ class Recorder:
         if self.mode == "replay":
             return
         key = self.make_key(tag=tag, model=model, messages=messages)
-        if key in self._index:
+        # 同一批次里同一个 key 只写一次；**不同批次**的同一 key 各留一份（这正是批次的意义）
+        existing = self._index.get(key, [])
+        if any(str(r.get("batch") or "") == self.batch for r in existing):
             return
         record = {
             "key": key,
             "tag": tag,
             "model": model,
+            "batch": self.batch,
             "n_messages": len(messages),
             "response": response,
         }
-        self._index[key] = record
+        existing.append(record)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
