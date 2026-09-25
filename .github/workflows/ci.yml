@@ -1,12 +1,17 @@
 # rca-agent CI (GitHub Actions)
 #
-# status: WRITTEN BUT NEVER RUN REMOTELY
-#   The development environment has no git remote, so this pipeline has not
-#   been executed on a runner yet. Everything it invokes IS verified locally by
-#   scripts/ci.ps1 (same commands, offline job only). Treat the first push as
-#   the real test - and if the Linux runner surfaces a platform assumption,
-#   that is a finding, not a nuisance: see harness-log #39 and #42, both of
-#   which were Windows-specific constraints discovered exactly this way.
+# status: RUNNING ON GITHUB ACTIONS
+#   First real runs: 2026-09-26 (repo pushed to github.com/Barney0809/rca-agent).
+#   · offline job: GREEN on the runner.
+#   · world job: was red twice -- (1) the diagnosed system needs Redis and the
+#     runner has no host Redis (fixed: use the compose `with-redis` profile and
+#     let W_REDIS_URL be overridden); (2) the readiness wait polled /healthz,
+#     but the services serve /health, so it timed out while every container was
+#     already healthy. That second one had been in this file since it was
+#     written and could never surface while the pipeline had never run -- which
+#     is the whole argument for running it.
+#   Everything the offline job invokes is also verifiable locally by
+#   scripts/ci.ps1 (same commands).
 #
 # two jobs on purpose:
 #   offline  - free, no Docker, no API key. Must be green for every push.
@@ -71,9 +76,9 @@ jobs:
       - name: wait for the three services to answer
         run: |
           for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 \
-               && curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1 \
-               && curl -fsS http://127.0.0.1:8082/healthz >/dev/null 2>&1; then
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 \
+               && curl -fsS http://127.0.0.1:8081/health >/dev/null 2>&1 \
+               && curl -fsS http://127.0.0.1:8082/health >/dev/null 2>&1; then
               echo "world is up"; exit 0
             fi
             sleep 2
@@ -88,4 +93,5 @@ jobs:
 
       - name: dump container logs on failure
         if: failure()
+        if: always()
         run: docker compose logs --no-log-prefix
