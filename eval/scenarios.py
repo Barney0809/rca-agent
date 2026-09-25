@@ -381,3 +381,31 @@ def describe_all() -> str:
         groups = "  +  ".join("/".join(g[:3]) for g in s.keyword_groups)
         lines.append(f"{s.fault_id:<4}  {s.label:<30}  {groups}")
     return "\n".join(lines)
+
+def keyword_verdict(text: str, cause: Cause) -> str:
+    """关键词侧的**三分类**判定，用来和 LLM 裁判对拍。
+
+    ⚠️ 原来的 keyword 判定只有布尔值（主张 / 没主张），
+       而"没主张"里混着两件完全不同的事：
+           dismissed —— 提到了，但明确否掉了（#16/#21 两次假阳性都出在这儿）
+           absent    —— 压根没提
+       要和裁判**同口径**比较，就必须把这两者分开。
+       分开的依据很直接：关键词出现过没有。
+    """
+    if cause.asserted(text):
+        return "asserted"
+
+    # ⚠️ "提到过"必须是**每一组都出现过**，不能是"任意一组出现过"。
+    #
+    #    这个 bug 是审计脚本当场抓出来的：F4 的判据是
+    #        （重试/retry）+（inventory/库存）
+    #    而一段**从没提过重试配置**的答案里，因为传播链写了
+    #    "payment→inventory→order"，就含了 `inventory` ——
+    #    于是被误判成"提到了但否掉了"（dismissed），而真相是 **absent**。
+    #
+    #    一句话：**判据是合取，就不能用析取去判断"它提没提过"。**
+    low = text.lower()
+    present = [
+        any(kw.lower() in low for kw in group) for group in cause.keyword_groups
+    ]
+    return "dismissed" if all(present) else "absent"
