@@ -59,7 +59,14 @@ jobs:
         run: uv sync
 
       - name: start the diagnosed system
-        run: docker compose up -d --build
+        # CI 上没有"宿主机的原生 Redis"（本机靠 Docker Desktop 提供的
+        # host.docker.internal 访问它；Linux runner 上没有那样一个宿主服务）。
+        # 所以这里启用 compose 里已经准备好的**容器版 Redis**（with-redis profile），
+        # 并把 W_REDIS_URL 指过去 —— 为此 docker-compose.yml 里那三行改成了可被
+        # 环境变量覆盖（默认值不变，本机行为不受影响）。
+        env:
+          W_REDIS_URL: "redis://redis:6379/0"
+        run: docker compose --profile with-redis up -d --build
 
       - name: wait for the three services to answer
         run: |

@@ -45,7 +45,7 @@ services:
     command: ["python", "-m", "uvicorn", "world.payment.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       W_PORT: "8000"
-      W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
+      W_REDIS_URL: "${W_REDIS_URL:-redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0}"
       W_LOG_LEVEL: "INFO"
       # ⚠️ 必须足够大，理由同 order：持有连接跨网络调下游，
       #    吞吐 ≈ 池容量 / 下游耗时。池太小时，F1（下游变慢）会在这里
@@ -78,7 +78,7 @@ services:
     command: ["python", "-m", "uvicorn", "world.inventory.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       W_PORT: "8000"
-      W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
+      W_REDIS_URL: "${W_REDIS_URL:-redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0}"
       W_LOG_LEVEL: "INFO"
       # ⚠️ 必须足够大，理由同 order：持有连接跨网络调下游。
       W_POOL_SIZE: "64"
@@ -112,7 +112,7 @@ services:
     command: ["python", "-m", "uvicorn", "world.order.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       W_PORT: "8000"
-      W_REDIS_URL: "redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0"
+      W_REDIS_URL: "${W_REDIS_URL:-redis://:${W_REDIS_PASSWORD}@host.docker.internal:6379/0}"
       W_LOG_LEVEL: "INFO"
       # ★ 这是"连接池耗尽"最容易发生的地方：它持有连接去调下游。
       #
