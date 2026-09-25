@@ -116,6 +116,24 @@ def _rank(mark: str) -> int:
     return {SEALED_MARK: 2, PARTIAL_MARK: 1, OPEN_MARK: 0}.get(mark, 0)
 
 
+def unbacked_claims(declared: dict[str, str], spec: dict) -> list[str]:
+    """声明为"已封堵"、却没有任何变异组背书的条目。
+
+    这类条目**不是错误**，但它们目前只靠人的记忆维持 ——
+    而 harness-log #1 已经证明"靠人记得"会失效。
+
+    抽成独立函数是为了让它可以被**直接测试**（含合成用例）：
+    如果只写在 `main()` 里，"这个检查到底会不会发现东西"就只能靠真数据来体现，
+    而真数据早晚会被补齐（本次就补齐了）—— 那时检查会静默变成"永远为空"。
+    """
+    covered = {i for g in spec.values() for i in g.get("harness_log", [])}
+    return [
+        item
+        for item, mark in sorted(declared.items())
+        if mark == SEALED_MARK and item not in covered
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="封堵清单对账")
     ap.add_argument("--skip-mutations", action="store_true",
@@ -190,10 +208,7 @@ def main() -> int:
     # ---------- 3. 声明了已封堵、却没有任何变异组的条目 ----------
     print()
     print("── ⚠️ 没有可执行证据的'已封堵'声明（只靠人的记忆维持）──")
-    unbacked = [
-        item for item, mark in sorted(declared.items())
-        if mark == SEALED_MARK and item not in covered
-    ]
+    unbacked = unbacked_claims(declared, spec)
     if not unbacked:
         print("  （无 —— 每一条'已封堵'都有变异组背书）")
     else:

@@ -566,31 +566,173 @@ def test_seal_report_covers_every_mutation_group():
     assert len(all_items) >= 8, f"映射覆盖的条目太少：{sorted(all_items)}"
 
 
-def test_seal_report_reports_unbacked_claims():
-    """核心价值：它必须**列出**"声明已封堵却没有变异组背书"的条目。
+def test_seal_report_finds_no_unbacked_claims_any_more(tmp_path):
+    """所有'已封堵'声明现在都有变异组背书 —— **这是 D9 补齐工作的验收**。
 
-    这类条目不是错误，但它们目前只靠人的记忆维持 ——
-    而 harness-log #1 已经证明"靠人记得"会失效。
-    如果这个脚本不把它列出来，那它就只是在重复表格，没有增加任何信息。
+    ⚠️ 这条用例的第一版是反过来的：它断言"应该存在若干无背书的条目"，
+       用来证明那个检查有东西可查。D9 把这 13 条补齐之后，
+       它开始失败 —— 而**失败本身正是这项工作成功的证明**。
+
+       所以现在改成：真实数据里**不许**再有没背书的声明（= 门禁），
+       同时另配一条**合成用例**证明这个检查本身仍然能发现问题（见下一条）。
     """
-    mod = _seal_mod()
     import json
 
+    mod = _seal_mod()
     root = Path(__file__).resolve().parent.parent
     spec = json.loads((root / "scripts" / "mutations.json").read_text(encoding="utf-8"))
+
+    unbacked = mod.unbacked_claims(mod.declared_statuses(), spec)
+    assert unbacked == [], (
+        f"以下条目声明为已封堵、却没有任何变异组背书：{unbacked}\n"
+        "要么补一个变异组，要么把声明降级为 🟡（如实标注'靠人'）。"
+    )
+
+    # ⚠️ **防"空绿"**：如果解析器坏了（读不到任何声明），
+    #    上面那句 `unbacked == []` 会**因为"没有声明可查"而通过** ——
+    #    检查坏了却显示一切正常，正是本项目的头号大敌。
+    #    所以这里再断言"确实读到了一大批声明"。
     declared = mod.declared_statuses()
+    assert len(declared) >= 20, (
+        f"只读到 {len(declared)} 条声明 —— 解析器很可能坏了，"
+        "而那样的话上面的空清单毫无意义（空绿）"
+    )
 
-    covered = {i for s in spec.values() for i in s["harness_log"]}
-    unbacked = [
-        i for i, m in declared.items()
-        if m == mod.SEALED_MARK and i not in covered
+
+def test_seal_report_can_still_detect_an_unbacked_claim():
+    """合成用例：喂一条假的"已封堵"声明给它，它**必须**发现。
+
+    没有这一条，上面那条 `unbacked == []` 可能只是因为**检查坏了** ——
+    比如解析器读不到任何声明（那就永远为空），或者映射逻辑写反了。
+    """
+    mod = _seal_mod()
+
+    fake_declared = {"#99": mod.SEALED_MARK, "#14": mod.SEALED_MARK}
+    fake_spec = {"some_group": {"harness_log": ["#14"]}}
+
+    found = mod.unbacked_claims(fake_declared, fake_spec)
+
+    assert found == ["#99"], (
+        f"应当发现 #99 没有背书、而 #14 有；实际 {found}"
+    )
+    # 部分封堵（🟡）与未封堵（🔴）都不该出现在这个清单里
+    assert mod.unbacked_claims({"#98": mod.PARTIAL_MARK, "#97": mod.OPEN_MARK}, {}) == []
+
+
+# ================================================================
+# 三条只有集成测试的封堵 → 补一道**离线结构守卫**
+# ================================================================
+#
+# 背景（D9 做封堵对账时发现的）：
+#
+#   #5（库存耗尽伪装成"注入失效"）、#7（loadgen 超发 53%）、
+#   #8（F4 完全没效果）三条，**只有 Docker 集成测试**：
+#
+#       tests/test_world.py::test_regression_5_stock_is_not_drained
+#       tests/test_world.py::test_loadgen_respects_max_requests
+#       tests/test_world.py::test_f4_retry_storm_multiplies_downstream_traffic
+#
+#   而副本变异**在原理上验证不了它们**：集成测试打的是**正在运行的容器**，
+#   容器里跑的是真实源码，不是变异副本。所以"改代码 → 用例变红"这条路走不通。
+#
+# ⇒ 补三道**离线结构守卫**，把这三条修复的**不变量**搬进离线测试层。
+#   它们不替代集成测试（端到端证据仍然是那三条），但它们让修复
+#   **可以被持续、离线、可变异地校验**。
+#
+# ⚠️ 守卫的对象是"不变量本身"，不是"某一行代码"：
+#   这样它不会因为无关重构而误报，而真正退回原缺陷时一定会红。
+
+
+def _read_source(rel: str) -> str:
+    return (Path(__file__).resolve().parent.parent / rel).read_text(encoding="utf-8")
+
+
+def test_regression_5_default_stock_is_large_enough_to_survive_a_scenario():
+    """#5 的不变量：**库存默认值必须大到不会在场景中途被抽干**。
+
+    历史：默认库存是 1000，而一个场景要打几千个请求 ——
+    库存耗尽后请求开始 409 短路，payment 断流，看起来像"故障注入没生效"。
+    排查花了一小时（harness-log #5：**"注入失效"其实是被测系统自己先累死了**）。
+    """
+    import ast
+
+    src = _read_source("world/inventory/main.py")
+    tree = ast.parse(src)
+
+    value = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "DEFAULT_STOCK":
+                    value = node.value.value
+
+    assert value is not None, "找不到 DEFAULT_STOCK —— 场景就没法保证库存不会被抽干"
+    assert value >= 100_000, (
+        f"DEFAULT_STOCK = {value}，太小了。一个场景会打几千个请求，"
+        "库存被抽干会让请求 409 短路，并**伪装成'故障注入没生效'**（harness-log #5）"
+    )
+
+
+def test_regression_7_loadgen_worker_checks_the_request_cap_itself():
+    """#7 的不变量：**worker 自己必须检查请求数上限**，不能只靠监控循环。
+
+    历史：只靠"每 5 秒醒一次的监控循环"检查，结果**超发 53%**
+    （目标 1200 实发 1841）——数据量就不可复现了，而"可复现"是 FR-C 的硬要求。
+    """
+    import ast
+
+    src = _read_source("world/loadgen/main.py")
+    tree = ast.parse(src)
+
+    # ⚠️ 必须同时认 FunctionDef 与 AsyncFunctionDef ——
+    #    `_worker` 是 `async def`，在 AST 里是 **AsyncFunctionDef**。
+    #    （本文件里我已经在"按名字找用例"和"按名字找函数"上各栽过一次：
+    #      `grep '^def test_'` 漏掉了所有 async 用例。别再靠记忆。）
+    worker = next(
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "_worker"
+        ),
+        None,
+    )
+    assert worker is not None, "找不到 _worker"
+
+    # 它必须在自己的循环里拿 max_requests 做比较
+    compares_max = [
+        n
+        for n in ast.walk(worker)
+        if isinstance(n, ast.Compare)
+        and any(isinstance(x, ast.Name) and x.id == "max_requests" for x in n.comparators)
     ]
+    assert compares_max, (
+        "_worker 里没有用 max_requests 做比较 —— 上限只由监控循环检查的话，"
+        "每 5 秒一次的空档足以让它超发 50% 以上（harness-log #7）"
+    )
 
-    # 当前确实存在这样的条目（早期是手工验证的）。断言它非空，
-    # 是为了证明"这个检查有东西可查" —— 如果哪天补全了，把它改成 >= 0 并注明即可。
-    assert unbacked, (
-        "现在应该存在若干'已封堵但没有变异组'的条目（#2~#13 是手工验证的）。"
-        "若确实已全部补齐，请把这条断言改为 >= 0 并说明。"
+
+def test_regression_8_f4_injects_both_the_trigger_and_the_amplifier():
+    """#8 的不变量：**F4 必须同时注入"触发条件"和"放大器"**。
+
+    历史：F4 只改了 inventory 的重试次数（1 → 5），跑出来 5xx=0，与基线一模一样 ——
+    **整个场景完全没有效果**。原因：重试只在**失败**时才触发，
+    而那时 payment 从不失败，所以"重试 5 次"从来没被执行过。
+
+    实测证据（`scripts/exp_pool_vs_latency.py --downstream-retries 5 --risk-error-rate 0`）：
+    1529 个请求全部成功、0 个 5xx。
+    """
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root / "scripts") not in _sys.path:
+        _sys.path.insert(0, str(root / "scripts"))
+    from inject_fault import FAULTS  # noqa: PLC0415
+
+    f4 = FAULTS["F4"]
+    assert f4.patches["inventory"]["downstream_retries"] > 1, "F4 必须放大重试次数"
+    assert f4.patches["payment"]["risk_error_rate"] > 0, (
+        "F4 必须**同时**让 payment 报错。"
+        "只改重试次数时，重试永远不会被触发（因为没有失败），场景完全没效果 —— harness-log #8"
     )
 
 

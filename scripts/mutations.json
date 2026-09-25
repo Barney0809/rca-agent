@@ -358,7 +358,8 @@
   },
   "seal_checklist_integrity": {
     "harness_log": [
-      "#25"
+      "#25",
+      "#26"
     ],
     "why": "The sealing checklist reconciles two things that can drift apart: the human claim written in docs/harness-log.md, and whether the mutation actually turns the tests red. If its parser silently reads nothing from the table, the reconciliation becomes vacuously green -- 'no declarations found, so everything is consistent'. That is precisely the failure mode the checklist exists to prevent, so the parser itself needs a proved mutation.",
     "tests": [
@@ -367,13 +368,188 @@
     "mutations": [
       {
         "id": "seal-a-parser-reads-nothing",
-        "desc": "Make the status parser read an empty document. Every declared sealing claim then becomes invisible and the reconciliation passes for the wrong reason.",
+        "desc": "Make the status parser read an empty document. Every declared sealing claim becomes invisible -- and, crucially, the gate ('no unbacked claims') would then pass VACUOUSLY, because an empty declaration map trivially has nothing unbacked. This is why that gate also asserts how many declarations it read.",
         "file": "scripts/seal_report.py",
         "find": "    text = LOG_PATH.read_text(encoding=\"utf-8\")\n    out: dict[str, str] = {}",
         "replace": "    text = \"\"\n    out: dict[str, str] = {}",
         "expect_red": [
           "tests/test_offline.py::test_seal_report_parses_the_declared_statuses",
-          "tests/test_offline.py::test_seal_report_reports_unbacked_claims"
+          "tests/test_offline.py::test_seal_report_finds_no_unbacked_claims_any_more"
+        ]
+      }
+    ]
+  },
+  "historical_encoding_and_parsing": {
+    "harness_log": [
+      "#2",
+      "#3",
+      "#6"
+    ],
+    "why": "Backfill for items sealed before the mutation harness existed. #2/#3: an executable script containing non-ASCII is misread by PowerShell 5.1 (UTF-8 no BOM read as GBK) -- it corrupted a path once and the result was an unrecoverable deletion. #6: the log parser required a [service] segment, so every line written by a third-party library (httpx) was silently dropped -- 21% of all lines, including the key evidence.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "hist-ascii-put-chinese-into-the-makefile",
+        "desc": "Put a Chinese comment into the Makefile. PowerShell 5.1 reads UTF-8-without-BOM as GBK, so the file is misparsed -- the mechanism that once deleted a real directory by mangling a path.",
+        "file": "Makefile",
+        "find": "# rca-agent task entry point",
+        "replace": "# rca-agent 任务入口（这是一条触发合规检查的中文注释）",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_3_scripts_must_be_pure_ascii"
+        ]
+      },
+      {
+        "id": "hist-parse-require-the-service-segment",
+        "desc": "#6: make the [service] segment mandatory again. Every line written by httpx (about a fifth of all lines, and the ones carrying 'downstream 502') then fails to parse and is dropped.",
+        "file": "src/rca/telemetry/parse.py",
+        "find": "    r\"(?:\\[(?P<service>[^\\]]+)\\]\\s+)?\"          # ← 可选，不可省略",
+        "replace": "    r\"\\[(?P<service>[^\\]]+)\\]\\s+\"",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_6_third_party_log_lines_are_parsed"
+        ]
+      }
+    ]
+  },
+  "historical_downstream_contract": {
+    "harness_log": [
+      "#4"
+    ],
+    "why": "#4: the downstream client treated only 5xx as failure, so a 409 (out of stock) was reported to the caller as success -- the order service then logged CONFIRMED. Silent swallowing of an error, more dangerous than a crash.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "hist-downstream-treat-4xx-as-success",
+        "desc": "Revert to 'only >= 500 is an error', so 4xx responses flow back as success.",
+        "file": "world/common/downstream.py",
+        "find": "            if 400 <= resp.status_code < 500:",
+        "replace": "            if False:",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_4_downstream_4xx_is_rejected_not_success"
+        ]
+      }
+    ]
+  },
+  "historical_policy_grants": {
+    "harness_log": [
+      "#9",
+      "#10"
+    ],
+    "why": "#9: grant() stored the path prefix verbatim, so a RELATIVE prefix could never match the absolute path that covers() compares -- authorisation failed silently (no error, no trace). #10: restore(None) handed None to a regex and raised TypeError -- an internal crash instead of an explainable refusal.",
+    "tests": [
+      "tests/test_policy.py"
+    ],
+    "mutations": [
+      {
+        "id": "hist-grant-without-resolving-the-prefix",
+        "desc": "#9: store the prefix verbatim again. A relative prefix then never matches the resolved absolute path, and the grant silently does nothing.",
+        "file": "src/rca/policy/engine.py",
+        "find": "            path_prefix=str(Path(path_prefix).resolve(strict=False)),",
+        "replace": "            path_prefix=str(path_prefix),",
+        "expect_red": [
+          "tests/test_policy.py::test_regression_grant_with_relative_prefix_still_covers"
+        ]
+      },
+      {
+        "id": "hist-quarantine-skip-id-validation",
+        "desc": "#10: skip the type check on the quarantine id. A None id (which the caller gets when the preceding delete was refused) then reaches the regex and raises TypeError -- an internal crash instead of an explainable refusal with a suggestion.",
+        "file": "src/rca/policy/engine.py",
+        "find": "        if not quarantine_id or not isinstance(quarantine_id, str):",
+        "replace": "        if False:",
+        "expect_red": [
+          "tests/test_policy.py::test_restore_with_missing_id_is_a_clean_denial_not_a_crash"
+        ]
+      }
+    ]
+  },
+  "historical_eval_metrics": {
+    "harness_log": [
+      "#11",
+      "#12",
+      "#13",
+      "#22"
+    ],
+    "why": "Backfill for the three measurement defects that each invalidated a published baseline, plus #22 which reused the same guard. #11: the noise band took min/max over single-attempt booleans, so it was always [0,1] -- a constant dressed up as a statistic. #12: metrics were read live as cumulative counters, so the agent saw other scenarios' leftovers. #13: the step budget was picked casually and turned a configuration problem into an apparent capability problem; its warning is also what caught #22 automatically.",
+    "tests": [
+      "tests/test_eval.py",
+      "tests/test_telemetry.py"
+    ],
+    "mutations": [
+      {
+        "id": "hist-band-over-attempts-not-rounds",
+        "desc": "#11: compute the noise band from individual attempts instead of per-round accuracy. It becomes constant [0,1] -- meaningless, but it looks like a statistic.",
+        "file": "eval/runner.py",
+        "find": "            \"accuracy_band\": self._band(round_acc),",
+        "replace": "            \"accuracy_band\": self._band(accs),",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_11_noise_band_is_over_rounds_not_attempts"
+        ]
+      },
+      {
+        "id": "hist-metrics-ignore-snapshots",
+        "desc": "#12: ignore the before/after snapshots and fall back to live cumulative counters. The agent then reads metrics polluted by every earlier scenario -- this invalidated an entire published baseline.",
+        "file": "src/rca/telemetry/collect.py",
+        "find": "    if before is not None and after is not None:\n        return _window_view(before, after, services)",
+        "replace": "    if False:\n        return _window_view(before, after, services)",
+        "expect_red": [
+          "tests/test_telemetry.py::test_regression_12_counters_are_window_deltas"
+        ]
+      },
+      {
+        "id": "hist-convergence-warning-always-off",
+        "desc": "#13 (and #22): remove the warning that fires when convergence is incomplete. An accuracy number computed from unfinished runs is then presented as if it were comparable -- exactly how a configuration problem gets recorded as a capability problem.",
+        "file": "eval/runner.py",
+        "find": "    if conv < 1.0:",
+        "replace": "    if False:",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_13_report_warns_when_accuracy_is_not_comparable"
+        ]
+      }
+    ]
+  },
+  "historical_world_integration_only": {
+    "harness_log": [
+      "#5",
+      "#7",
+      "#8",
+      "#26"
+    ],
+    "why": "These three were sealed only by Docker integration tests, which a copy-mutation harness fundamentally cannot validate: the tests hit the RUNNING containers, and the containers run the real source, not the mutant copy. So offline structural guards were added for the invariants they protect -- not replacing the end-to-end evidence, but making the fix continuously checkable offline and mutation-provable.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "hist-stock-deplete-a-scenario-midway",
+        "desc": "#5: shrink the default stock back to 1000. A scenario fires thousands of requests, so stock runs out, requests short-circuit with 409 and payment goes quiet -- which then LOOKS like 'the fault injection had no effect'.",
+        "file": "world/inventory/main.py",
+        "find": "DEFAULT_STOCK = 1_000_000",
+        "replace": "DEFAULT_STOCK = 1000",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_5_default_stock_is_large_enough_to_survive_a_scenario"
+        ]
+      },
+      {
+        "id": "hist-loadgen-rely-on-the-monitor-loop",
+        "desc": "#7: remove the worker-side request cap and rely on the monitor loop that wakes every 5 seconds. It then overshoots the target by more than 50% (1200 requested, 1841 sent), and the data volume stops being reproducible.",
+        "file": "world/loadgen/main.py",
+        "find": "        if _total(stats) >= max_requests:\n            stop.set()\n            return",
+        "replace": "        if _total(stats) >= max_requests + 10**9:\n            stop.set()\n            return",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_7_loadgen_worker_checks_the_request_cap_itself"
+        ]
+      },
+      {
+        "id": "hist-f4-inject-only-the-amplifier",
+        "desc": "#8: inject only the retry amplification, with a healthy payment. Retries only fire on failure, so nothing ever fires -- the scenario produced zero 5xx and was indistinguishable from the baseline.",
+        "file": "scripts/inject_fault.py",
+        "find": "            patches={\n                \"payment\": {\"risk_error_rate\": 0.6},\n                \"inventory\": {\"downstream_retries\": 5},\n            },",
+        "replace": "            patches={\n                \"payment\": {\"risk_error_rate\": 0.0},\n                \"inventory\": {\"downstream_retries\": 5},\n            },",
+        "expect_red": [
+          "tests/test_offline.py::test_regression_8_f4_injects_both_the_trigger_and_the_amplifier"
         ]
       }
     ]
