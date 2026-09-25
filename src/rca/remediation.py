@@ -38,6 +38,55 @@ REMEDIATION_AUDIT_PATH = Path("runs") / "_remediation.ndjson"
 #: 允许提案的动作白名单 —— **只有可逆的**（ADR-0006：不存在硬删除）
 REVERSIBLE_ACTIONS = ("set_knobs",)
 
+#: 旋钮别名的规范表。**与 `scripts/inject_fault.py` 里那张表必须一致** ——
+#: 那边也有一份（注入器在 scripts/ 下，从 src/ import 它会把依赖方向倒过来）。
+#: 两处一致由一条用例钉住（`test_env_name_translation_matches_the_injector`），
+#: 所以不会静默漂移。
+KNOB_ALIASES = {
+    "pool_size": "pool_limit",          # W_ORDER_POOL_SIZE → pool_limit
+}
+
+#: 世界服务的 knob 观测地址（**只读**，用于"动作到底生效没有"）
+WORLD_KNOB_URLS = {
+    "order": "http://127.0.0.1:8080",
+    "inventory": "http://127.0.0.1:8081",
+    "payment": "http://127.0.0.1:8082",
+}
+
+
+def knob_name_from_env(env_key: str, service: str = "") -> str:
+    """把变更记录里的 **env 变量名**翻译成世界认的 **旋钮名**。
+
+    ⚠️ 实测踩过的坑（2026-09-26，第一次 live 跑 M5）：变更记录的 `key` 是
+       `W_INVENTORY_DOWNSTREAM_RETRIES`，而世界的 `/_inject` 只认 `downstream_retries`
+       —— 名字不对时它会**返回 200 且 `changed: {}`**（什么都没改），
+       于是"执行成功"是一句假话，而且**没有任何报错**。
+    """
+    name = str(env_key or "").strip().lower()
+    if name.startswith("w_"):
+        name = name[2:]
+    for token in (str(service or "").lower(), "order", "inventory", "payment"):
+        if token and name.startswith(token + "_"):
+            name = name[len(token) + 1:]
+            break
+    return KNOB_ALIASES.get(name, name)
+
+
+def read_world_knob(service: str, knob: str) -> object | None:
+    """读回某个服务当前的旋钮值（**观测**，不是动作 —— 走只读的 `/_knobs`）。
+
+    读不到就返回 None（"读不到"与"值不对"必须分开，见 `apply`）。
+    """
+    import httpx
+
+    base = WORLD_KNOB_URLS.get(service)
+    if base is None:
+        return None
+    try:
+        return httpx.get(f"{base}/_knobs", timeout=5.0).json().get(knob)
+    except Exception:                                                 # noqa: BLE001
+        return None
+
 
 def _mcp_ops_call(name: str, arguments: dict) -> dict:
     """默认执行通道：**经 MCP 客户端**调 ops 工具（被点名的那扇 Agent 门）。
@@ -61,10 +110,11 @@ class Proposal:
     """
 
     service: str
-    knob: str
+    knob: str                   # **世界认的旋钮名**（已从 env 名翻译过来）
     current_value: str          # 现在是什么（变更记录里的 to）
     target_value: str           # 要改回什么（变更记录里的 from）
     source: str
+    env_key: str = ""           # 变更记录里的原始 env 名（便于追溯，不发给世界）
     action: str = "set_knobs"
 
     def to_dict(self) -> dict:
@@ -72,6 +122,7 @@ class Proposal:
             "action": self.action,
             "service": self.service,
             "knob": self.knob,
+            "env_key": self.env_key,
             "current_value": self.current_value,
             "target_value": self.target_value,
             "source": self.source,
@@ -79,7 +130,8 @@ class Proposal:
         }
 
     def describe(self) -> str:
-        return (f"{self.action}：{self.service}.{self.knob} 由 {self.current_value} "
+        aka = f"（env 名 {self.env_key}）" if self.env_key and self.env_key != self.knob else ""
+        return (f"{self.action}：{self.service}.{self.knob}{aka} 由 {self.current_value} "
                 f"改回 {self.target_value}（依据：{self.source}）")
 
 
@@ -99,7 +151,8 @@ def propose(changes: list[dict]) -> list[Proposal]:
             continue
         out.append(Proposal(
             service=service,
-            knob=knob,
+            knob=knob_name_from_env(knob, service),   # ★ 翻译：世界只认旋钮名
+            env_key=knob,
             current_value=str(after),       # 现在是 after
             target_value=str(before),       # 目标是把 before 改回来
             source=f"{rec.get('ts', '?')} 由 {rec.get('by', '?')} 注入："
@@ -113,11 +166,14 @@ def apply(
     *,
     ops_call: Callable[[str, dict], dict] | None = None,
     approved_by: str = "",
+    read_knob: Callable[[str, str], object | None] | None = None,
 ) -> dict:
-    """执行提案 —— **必须先有人审批**，且动作必须**经那扇被批准的 MCP 门**。
+    """执行提案 —— **必须先有人审批**，**必须读回确认真的变了**。
 
-    没有 `approved_by` 就**直接拒绝、什么都不做**：这条链路上最容易出的错
-    就是"审批"被写成了一个可选参数、然后慢慢被默认通过。
+    ⚠️ 两条都是踩出来的：
+      · 没有 `approved_by` 就什么都不做（"审批"不能是个默认通过的参数）；
+      · **不能只看返回码**判断成功：世界对不认识的字段会返回 200 + `changed: {}`
+        ⇒ 动作什么都没改，而"applied=True"会是一句假话（实测过）。
     """
     if not approved_by.strip():
         return {"applied": False, "reason": "缺少审批人 —— 这条链路不允许无人审批执行",
@@ -128,21 +184,37 @@ def apply(
                 "audit_written": 0}
 
     call = ops_call or _mcp_ops_call
+    reader = read_knob or read_world_knob
+    knob = str(proposal.knob)
     arguments: dict[str, Any] = {
         "service": proposal.service,
-        "knobs": {proposal.knob: proposal.target_value},
+        "knobs": {knob: proposal.target_value},
     }
     payload = call("set_knobs", arguments)
     payload = dict(payload) if isinstance(payload, dict) else {"raw": str(payload)}
-    applied = bool(payload.get("allowed", payload.get("ok", False)))
+
+    # ★ 读回：动作生效的唯一凭据（返回码不算）
+    observed = reader(proposal.service, knob)
+    effect_ok = observed is not None and str(observed) == str(proposal.target_value)
+    applied = bool(payload.get("allowed", payload.get("ok", False))) and effect_ok
+    reason = ""
+    if not effect_ok:
+        reason = (f"静默空操作：世界没有发生任何变化（读回 {knob}={observed!r}，"
+                  f"期望 {proposal.target_value!r}）—— 常见原因是名字用错"
+                  f"（变更记录里是 env 名，世界认的是旋钮名: {knob_name_from_env(knob, proposal.service)}）")
+
     written = append_audit({
         "type": "remediation_applied",
         "approved_by": approved_by,
         "proposal": proposal.to_dict(),
+        "arguments": arguments,
+        "observed_after": observed,
         "result": payload,
         "applied": applied,
+        "reason": reason,
     })
-    return {"applied": applied, "result": payload, "audit_written": written}
+    return {"applied": applied, "reason": reason, "observed": observed,
+            "result": payload, "audit_written": written}
 
 
 def verify(*, symptom: str, before: int | None, after: int | None) -> dict:

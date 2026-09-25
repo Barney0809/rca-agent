@@ -1,0 +1,116 @@
+{
+  "ts": "2026-09-26T03:35:30+08:00",
+  "fault": "F4",
+  "orders": 10,
+  "world": {
+    "order": "up",
+    "inventory": "up",
+    "payment": "up"
+  },
+  "before": {
+    "orders": 10,
+    "downstream_calls_delta": 21.0,
+    "downstream_calls_per_order": 2.1,
+    "error_calls_delta": 11.0,
+    "knobs": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 5
+    }
+  },
+  "proposals": [
+    {
+      "action": "set_knobs",
+      "service": "inventory",
+      "knob": "downstream_retries",
+      "env_key": "W_INVENTORY_DOWNSTREAM_RETRIES",
+      "current_value": "5",
+      "target_value": "1",
+      "source": "2026-09-26T03:16:58+08:00 由 injector 注入：inventory.W_INVENTORY_DOWNSTREAM_RETRIES 1 → 5",
+      "reversible": true
+    }
+  ],
+  "applied": [
+    {
+      "proposal": {
+        "action": "set_knobs",
+        "service": "inventory",
+        "knob": "downstream_retries",
+        "env_key": "W_INVENTORY_DOWNSTREAM_RETRIES",
+        "current_value": "5",
+        "target_value": "1",
+        "source": "2026-09-26T03:16:58+08:00 由 injector 注入：inventory.W_INVENTORY_DOWNSTREAM_RETRIES 1 → 5",
+        "reversible": true
+      },
+      "applied": true,
+      "reason": "",
+      "audit_written": 1,
+      "result": {
+        "tool": "set_knobs",
+        "allowed": true,
+        "reason": "已按策略放行并写入 inventory",
+        "suggestion": "",
+        "quarantine_id": "",
+        "detail": {
+          "service": "inventory",
+          "requested": {
+            "downstream_retries": "1"
+          },
+          "world_reply": {
+            "changed": {
+              "downstream_retries": [
+                5,
+                "1"
+              ]
+            },
+            "current": {
+              "pool_limit": 64,
+              "pool_acquire_timeout_ms": 2000,
+              "slow_op_ms": 0,
+              "leak_mb_per_req": 0.0,
+              "risk_latency_ms": 30,
+              "risk_error_rate": 0.0,
+              "downstream_retries": "1"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "after": {
+    "orders": 10,
+    "downstream_calls_delta": 0.0,
+    "downstream_calls_per_order": 0.0,
+    "error_calls_delta": 0.0,
+    "knobs": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": "1"
+    }
+  },
+  "verdict": {
+    "calls_per_order": {
+      "status": "improved",
+      "symptom": "每笔订单的下游调用次数",
+      "before": 210,
+      "after": 0,
+      "delta": -210
+    },
+    "error_calls": {
+      "status": "improved",
+      "symptom": "下游错误调用增量",
+      "before": 11.0,
+      "after": 0.0,
+      "delta": -11.0
+    }
+  },
+  "outcome": "action-ok-symptom-partial"
+}
