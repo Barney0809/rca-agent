@@ -1626,6 +1626,47 @@
       }
     ]
   },
+  "guard_mcp_face": {
+    "harness_log": [
+      "#57"
+    ],
+    "why": "#57 (M3): mounting the guard on MCP is what makes it a platform -- an outside agent only has to point its tools at this face. Three ways the face can silently stop being the face it claims: (a) the forwarded tools lose the upstream parameter names, so 'the other side does not have to change its code' stops being true (measured: the first version forwarded with **kwargs and the SDK rejected the call outright, because MCP derives the input schema from the function signature); (b) submit_conclusion is renamed/hidden, so the conclusion side -- the part MCP traffic cannot see -- is gone; (c) the forwarder ignores which tool it was asked for (the classic late-binding trap in a loop).",
+    "tests": [
+      "tests/test_mcp_face.py"
+    ],
+    "mutations": [
+      {
+        "id": "face-a-forwarder-falls-back-for-every-tool",
+        "desc": "Make every upstream tool take the passthrough signature, so the exposed schema no longer carries the upstream parameter names (and the arguments object is unwrapped into nothing). Note measured: nulling __signature__ alone does NOT work as a mutation -- the names are carried by __annotations__ as well, so a single-edit mutant leaves the schema intact and the harness refused it.",
+        "file": "src/rca/guard/mcp_face.py",
+        "find": "    params = UPSTREAM_SIGNATURES.get(tool_name, {\"arguments\": dict})",
+        "replace": "    params = {\"arguments\": dict}",
+        "expect_red": [
+          "tests/test_mcp_face.py::test_forwarded_tools_keep_the_upstream_parameter_names"
+        ]
+      },
+      {
+        "id": "face-b-submit-conclusion-renamed",
+        "desc": "Rename the conclusion tool, so the half of the contract that MCP traffic cannot see (the agent's final claim) disappears from the face.",
+        "file": "src/rca/guard/mcp_face.py",
+        "find": "        name=\"submit_conclusion\",",
+        "replace": "        name=\"submit\",",
+        "expect_red": [
+          "tests/test_mcp_face.py::test_face_exposes_upstream_tools_plus_submit_conclusion"
+        ]
+      },
+      {
+        "id": "face-c-forwarder-ignores-the-tool-name",
+        "desc": "Make every forwarder call the first upstream tool instead of the one it was asked for -- the late-binding trap the factory function exists to prevent.",
+        "file": "src/rca/guard/mcp_face.py",
+        "find": "        return face.call(tool_name, {k: v for k, v in kwargs.items() if v is not None})",
+        "replace": "        return face.call(list(UPSTREAM_SIGNATURES)[0], {k: v for k, v in kwargs.items() if v is not None})",
+        "expect_red": [
+          "tests/test_mcp_face.py::test_forwarding_reaches_the_upstream_and_lands_in_the_event_stream"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1639,7 +1680,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**302 passed / 1 skipped**",
+        "find": "**308 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1649,7 +1690,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**45 组 / 115 个变异体，全部 SEALED**",
+        "find": "**46 组 / 118 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"

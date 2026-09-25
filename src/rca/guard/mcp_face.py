@@ -85,8 +85,13 @@ UPSTREAM_SIGNATURES: dict[str, dict[str, type]] = {
 def _register_forwarder(server: MCPServer, face: GuardedToolFace, tool_name: str) -> None:
     """给一个上游工具注册转发 handler（保留上游的参数名）。"""
     params = UPSTREAM_SIGNATURES.get(tool_name, {"arguments": dict})
+    #: 不在签名表里的工具走"对象透传"——此时**必须拆包**，把 `arguments` 的内容交给上游，
+    #: 而不是把 `{"arguments": {...}}` 原样塞进去（实测被自己的用例抓到）。
+    passthrough = tool_name not in UPSTREAM_SIGNATURES
 
     def _handler(**kwargs: Any) -> dict:
+        if passthrough:
+            return face.call(tool_name, dict(kwargs.get("arguments") or {}))
         return face.call(tool_name, {k: v for k, v in kwargs.items() if v is not None})
 
     _handler.__name__ = f"forward_{tool_name}"
