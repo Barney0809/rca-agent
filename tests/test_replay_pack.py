@@ -17,6 +17,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -255,3 +256,49 @@ def test_trimming_keeps_what_the_pack_needs(tmp_path: Path) -> None:
     assert (kept, dropped) == (4, 1), f"裁剪计数不对：kept={kept} dropped={dropped}"
     keys = [json.loads(ln)["key"] for ln in dst.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert keys == ["k1", "k2", "k3", "k5"], f"裁剪结果不对：{keys}"
+
+
+# ---------------------------------------------------------------- 8) 清单 = 仓库里真有的东西
+
+def test_every_bundled_pack_file_is_tracked_by_git() -> None:
+    """清单里的文件必须**真的在仓库里**，而不是只在我这台机器上。
+
+    真实事故（2026-09-25，D20b 提交前）：演示包 16 个文件只进了 **8** 个 ——
+    `.gitignore` 的 `logs/` 与 `*.ndjson` 两条全局规则把 6 个 `.gz` 和
+    2 个 `changes.ndjson` 挡在了外面。当时：
+
+      · 本机一切正常（文件都在磁盘上）· 用例全绿 · `git status` 干净
+
+    只有看 `git diff --cached --stat`（发现 `.gz` 一个都没进去）或**干净克隆**
+    才会露馅 —— 克隆里包是残缺的，回放会直接报「缺少清单里的文件」。
+
+    ⚠️ 这条用例**刻意没有变异体背书**：它查的是"环境事实"（文件是否入库），
+       不是某段代码的分支；变异副本本身不是 git 仓库，在那边会 skip。
+       它的兜底是 **CI 跑在干净克隆上** —— 有文件没入库，CI 就会红。
+    """
+    manifest = json.loads((PACK / "pack.json").read_text(encoding="utf-8"))
+    files = sorted(manifest["files"])
+    assert files, "包里一个受票据保护的文件都没有"
+
+    probe = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        pytest.skip("不在 git 工作树里（变异副本 / 导出的源码包），无法核对入库状态")
+
+    listed = subprocess.run(
+        ["git", "ls-files", "replay_pack"],
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    tracked = {ln.strip() for ln in listed.stdout.splitlines() if ln.strip()}
+    assert tracked, "git ls-files replay_pack 什么都没返回 —— 守卫不能退化成空绿"
+
+    # ⚠️ 口径要对齐：清单里的键是**相对包目录**的，git 给的是**相对仓库根**的。
+    prefix = PACK.relative_to(ROOT).as_posix()
+    missing = [f for f in files if f"{prefix}/{f}" not in tracked]
+    assert not missing, (
+        "清单里的这些文件没有入库（克隆里包会是残缺的）：\n  "
+        + "\n  ".join(missing)
+        + "\n检查 .gitignore 里 `logs/` 与 `*.ndjson` 那两条全局规则。"
+    )
