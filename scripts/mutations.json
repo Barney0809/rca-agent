@@ -1502,6 +1502,47 @@
       }
     ]
   },
+  "runner_survives_api_errors": {
+    "harness_log": [
+      "#56"
+    ],
+    "why": "#56 (measured while running M2's guard-on arm): the run died on the FIRST attempt with 'openai.APIStatusError: 402 - Insufficient Balance'. That run had nothing to lose, but a crash on attempt 21 of 21 throws away twenty attempts that were ALREADY PAID FOR. So: a failed attempt is skipped and the loop continues; auth/balance errors (401/402/403) stop the run immediately but keep the completed attempts in the report and record the reason; everything else is treated as transient.",
+    "tests": [
+      "tests/test_runner_resilience.py"
+    ],
+    "mutations": [
+      {
+        "id": "rt-a-fatal-api-error-not-detected",
+        "desc": "Stop recognising 401/402/403, so a dead account keeps being hammered for the remaining rounds and (worse) the report never says why the numbers are short.",
+        "file": "eval/runner.py",
+        "find": "        if code in text or f\"status_code: {code}\" in text:",
+        "replace": "        if False:",
+        "expect_red": [
+          "tests/test_runner_resilience.py::test_fatal_balance_error_aborts_but_keeps_completed_attempts"
+        ]
+      },
+      {
+        "id": "rt-b-one-bad-attempt-kills-the-run",
+        "desc": "Let any exception from a single attempt propagate again, so one network hiccup ends a run whose earlier attempts were already paid for.",
+        "file": "eval/runner.py",
+        "find": "            except Exception as exc:                      # noqa: BLE001 —— 见上",
+        "replace": "            except ZeroDivisionError as exc:",
+        "expect_red": [
+          "tests/test_runner_resilience.py::test_transient_failure_skips_the_round_and_continues"
+        ]
+      },
+      {
+        "id": "rt-c-abort-throws-away-completed-attempts",
+        "desc": "Re-enact the original accident: abort on a fatal error but CLEAR the attempts collected so far -- the twenty paid-for attempts vanish exactly when the run stops early.",
+        "file": "eval/runner.py",
+        "find": "                    report.aborted_reason = f\"{fid} 第{rnd}轮：{fatal}\"",
+        "replace": "                    report.attempts.clear()\n                    report.aborted_reason = f\"{fid} 第{rnd}轮：{fatal}\"",
+        "expect_red": [
+          "tests/test_runner_resilience.py::test_fatal_balance_error_aborts_but_keeps_completed_attempts"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1515,7 +1556,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**283 passed / 1 skipped**",
+        "find": "**290 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1525,7 +1566,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**42 组 / 106 个变异体，全部 SEALED**",
+        "find": "**43 组 / 109 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"

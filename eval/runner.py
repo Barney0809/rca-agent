@@ -177,6 +177,41 @@ def discover_runs(fault_ids: list[str] | None = None) -> dict[str, Path]:
     return {fid: path for fid, (_, path) in sorted(found.items())}
 
 
+def _fatal_api_error(exc: BaseException) -> str:
+    """这是"再跑下去也没用"的错误吗？返回一句人话，否则返回空串。
+
+    为什么要有这个（2026-09-25，M2 实测时被真实撞上）：
+
+        臂 B 跑到**第一次尝试**时抛了
+        `openai.APIStatusError: 402 - Insufficient Balance`
+        —— 账户余额不足。结果是整个 21 次尝试的运行**直接崩掉**，
+        已经跑完的部分（这里是 0 次，但换一次运行就可能是 20 次）**全部丢掉**。
+
+    ⇒ 分两类处理：
+      · **致命**（401 未授权 / 402 余额不足 / 403 无权限）：再跑只会继续失败，
+        立刻停，但**把已完成的尝试存下来**，并说清是哪一种；
+      · **其它**：跳过这一次，继续跑（一次网络抖动不该毁掉整轮）。
+    """
+    text = f"{type(exc).__name__}: {exc}"
+    for code, why in (
+        ("402", "账户余额不足（请充值后重跑；已完成的尝试会照常存档）"),
+        ("401", "API Key 无效或未授权（检查 DEEPSEEK_API_KEY）"),
+        ("403", "账户无权调用该模型（检查账号权限）"),
+    ):
+        if code in text or f"status_code: {code}" in text:
+            return why
+    return ""
+
+
+def _report_attempt_failure(fid: str, rnd: int, exc: BaseException, *, fatal: str) -> None:
+    where = f"{fid} 第{rnd}轮"
+    if fatal:
+        print(f"\n  ⛔ {where} 中断：{fatal}")
+        print(f"     原始错误：{type(exc).__name__}: {str(exc)[:200]}")
+    else:
+        print(f"\n  ⚠️ {where} 失败（跳过这一次）：{type(exc).__name__}: {str(exc)[:200]}")
+
+
 # ================================================================
 # 结果结构
 # ================================================================
@@ -230,6 +265,10 @@ class Report:
     #   不记下来的话，跨时段比较成本会得出**假的一倍增长** —— 我自己就踩了（#30）。
     pricing_tier: str = ""
     attempts: list[Attempt] = field(default_factory=list)
+    # ★ 运行被**中途放弃**的原因（默认空 = 正常跑完）。
+    #   为什么要有：一次真实的 402（余额不足）曾让整轮运行抛异常，
+    #   已完成的尝试跟着一起丢 —— 那些尝试是**花了钱**的。
+    aborted_reason: str = ""
 
     # ---- 聚合 ----
     def agg(self) -> dict:
@@ -414,13 +453,23 @@ def run(
         for rnd in range(1, rounds + 1):
             if verbose:
                 print(f"  [{fid} 第{rnd}轮] ", end="", flush=True)
-            ctx = RunContext.from_run_dir(run_dir)
+            # ⚠️ 单次尝试失败**不能**毁掉整轮：完成过的尝试是花了钱的。
+            #    见 `_fatal_api_error` 的说明（M2 实测时真撞上 402）。
+            try:
+                ctx = RunContext.from_run_dir(run_dir)
 
-            if agent == "multi":
-                attempt = _run_multi_slice(client, ctx, fid, rnd, score, model,
-                                           max_steps, cross_exam_steps, judge_fn, guard=guard)
-            else:
-                attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score, judge_fn)
+                if agent == "multi":
+                    attempt = _run_multi_slice(client, ctx, fid, rnd, score, model,
+                                               max_steps, cross_exam_steps, judge_fn, guard=guard)
+                else:
+                    attempt = _run_baseline_slice(baseline_agent, ctx, fid, rnd, score, judge_fn)
+            except Exception as exc:                      # noqa: BLE001 —— 见上
+                fatal = _fatal_api_error(exc)
+                _report_attempt_failure(fid, rnd, exc, fatal=fatal)
+                if fatal:
+                    report.aborted_reason = f"{fid} 第{rnd}轮：{fatal}"
+                    return report          # 已完成的尝试留在 report 里，由调用方存档
+                continue
 
             report.attempts.append(attempt)
             if verbose:
@@ -1162,6 +1211,10 @@ def main(argv: list[str] | None = None) -> int:
         guard=args.guard,
     )
     print_report(report)
+    if report.aborted_reason:
+        # ★ 让"为什么没跑完"显式出现在屏幕上，而不是只留一句 traceback（M2 实测撞过 402）
+        print(f"\n  ⛔ 本次运行**中途放弃**：{report.aborted_reason}")
+        print(f"     已完成的 {len(report.attempts)} 次尝试照常存档 —— 那些是花了钱的。")
     if report.attempts:
         path = save_report(report)
         print(f"\n  结果已存：{path.relative_to(ROOT)}")

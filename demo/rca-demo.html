@@ -43,11 +43,11 @@
  <strong>多 Agent 不仅没有价值增量，而且<strong>更差</strong>。</strong>
  在同一个世界里，单 Agent 用 <span class="num">¥0.0172</span>/次拿到
  <span class="num">100.0%</span> 准确率；
- 三专员 + 交叉质证 + 裁决用 <span class="num">¥0.0732</span>/次
- （<strong>4.3×</strong>）拿到
- <span class="num">95.2%<span class='dim'>（按当前判据）</span> / 90.5%<span class='dim'>（存档判定）</span></span> —— 准确率反而<strong>低了 4.8 个百分点</strong>。
+ 三专员 + 交叉质证 + 裁决用 <span class="num">¥0.0722</span>/次
+ （<strong>4.2×</strong>）拿到
+ <span class="num">95.2%</span> —— 准确率反而<strong>低了 4.8 个百分点</strong>。
 </blockquote>
-<p class='dim'>⚠️ <strong>两个口径都给</strong>：存档里的判定是<strong>当时那版判据</strong>给出的；判据后来修过一次（关键词匹配漏了英文词形：<code>retry</code> 匹配不上 <code>retries</code>，见 harness-log #48），所以同一份存档按今天的判据重算会不一样。baseline 存档 100.0% → 按当前判据 <strong>100.0%</strong>；multi 存档 90.5% → 按当前判据 <strong>95.2%</strong>。上面的结论用的是<strong>按当前判据</strong>的那个数；重算只用同一份存档文本 + 当前判据代码，不花一分钱、可自行复跑。</p>
+
 <p class="dim">比这个负结果本身更重要的，是它<strong>是被测量出来的</strong>：
 一路上有七八次得到过相反的结论，每一次都是「尺子」坏了（见第四节）。</p>
 
@@ -57,12 +57,12 @@
 <tr><td>样本</td><td class="num">21 次尝试（7 场景 × 3 轮）</td>
     <td class="num">21 次尝试（F1/F3/F4/F5/F6/F7/F8 × 3 轮）</td><td>—</td></tr>
 <tr><td>准确率</td><td class="num"><strong>100.0%</strong></td>
-    <td class="num"><strong>90.5%</strong></td><td>—</td></tr>
+    <td class="num"><strong>95.2%</strong></td><td>—</td></tr>
 <tr><td>步数（LLM 轮次）</td><td class="num">8.3</td>
-    <td class="num">28.8</td><td class="num">3.5×</td></tr>
+    <td class="num">29.2</td><td class="num">3.5×</td></tr>
 <tr><td><strong>成本 / 次诊断</strong></td><td class="num"><strong>¥0.0172</strong></td>
-    <td class="num"><strong>¥0.0732</strong></td>
-    <td class="num"><strong>4.3×</strong></td></tr>
+    <td class="num"><strong>¥0.0722</strong></td>
+    <td class="num"><strong>4.2×</strong></td></tr>
 <tr><td>收敛率</td><td class="num">100%</td><td class="num">100%</td><td>—</td></tr>
 <tr><td>JSON 合规率</td><td class="num">100%</td><td class="num">100%</td><td>—</td></tr>
 </table>
@@ -70,7 +70,7 @@
 multi <code>off_peak</code>（存档记录）
 —— 峰时单价是谷时的 2 倍，<strong>只与同时段比较</strong>。
 起跑时刻：baseline <code>2026-09-25T08:50:45+08:00</code> ·
-multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</strong>按谷时计费）。
+multi <code>2026-09-25T23:29:09+08:00</code>（法定节假日<strong>全天</strong>按谷时计费）。
 有效场景 7 个 —— <strong>F2 已作废</strong>（它的标准答案是反的，见第四节）。
 ⚠️ 两侧覆盖**同一批**场景与轮数 ⇒ 这是**可对等比较**。</p>
 
@@ -79,9 +79,27 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 第 1 轮。下面是<strong>原样存档</strong>的工具调用与返回 ——
 页面不替它修饰任何东西。</p>
 <h3>最终裁决</h3>
-<blockquote>外部风控（payment 下游依赖）响应劣化：本窗口内 8049/8049 笔请求全部命中『外部风控响应缓慢』，单跳耗时约 800ms，占 payment 总耗时 818ms 的 98%，并沿调用链向上传导（inventory 899ms、order 1032ms）。这是本窗口内唯一能解释全链路延迟抬升的原因。；order 服务内存泄漏：leak_bytes_total≈4.22GB，在零报错、零失败、吞吐完整（各跳均 8049）的情况下持续增长。它与风控延迟无因果关系——去掉风控劣化它不会消失，去掉它风控延迟也不会消失，因此是一条独立的、需单独处置的问题。</blockquote>
+<blockquote>外部风控依赖延迟劣化：payment 调用外部风控时稳定附加约 800ms 延迟（8049 次 WARNING 与 8049 次扣款成功一一对应），延迟沿调用链向上传导 payment 818ms → inventory 899ms → order 1032ms，是本次链路整体变慢的直接原因。；order 服务内存泄漏：leak_bytes_total = 4.22e+09（约 4.22 GB），且完全&#x27;安静&#x27;（order/inventory/payment 三层错误计数器全为 0、连接池 pool_in_flight 均为 0）。它与外部风控延迟无因果关系——去掉风控延迟它不会消失，是一条需要单独处置的独立问题。</blockquote>
 <h3>三个专员 + 交叉质证各自做了什么</h3>
-<h3>investigate / logs</h3><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;ERROR&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+<h3>investigate / logs</h3><details><summary><code>query_logs</code> <span class="dim">{&quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+按服务：inventory=24147  order=24147  payment=16098
+按级别：INFO=56343  WARNING=8049
+
+## 异常时间线
+  07:23  W499
+  07:24  W3267
+  07:25  W3278
+  07:26  W1005
+
+## 消息模板
+[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=&lt;N&gt;ms
+    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms
+[order] INFO ×8049 07:23:49→07:26:18  收到下单请求 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; qty=&lt;N&gt;
+    例：2026-09-25 07:23:49.633 INFO  [order] trace=29633c78cf7 | 收到下单请求 order_id=ORD-1F9565B7D1 sku=SKU-002 qty=1
+[inventory] INFO ×8049 07:23:49→07:26:18  收到库存预留请求 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; qty=&lt;N&gt;
+    例：2026-09-25 07:23:49.776 INFO  [inventory] trace=29640ffc347 | 收到库存预留请求 order_id=ORD-A6A3C2D392 sku=SKU-001 qty=1
+[inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:&lt;N&gt;/charge &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
+    例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http:</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;ERROR&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -104,7 +122,18 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 
 ## 消息模板
 [payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;风控&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;超时&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+按服务：inventory=24147  order=24147  payment=16098
+按级别：INFO=56343  WARNING=8049
+
+## 异常时间线
+  07:23  W499
+  07:24  W3267
+  07:25  W3278
+  07:26  W1005
+
+## 消息模板
+（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;风控&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -164,18 +193,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 [inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:&lt;N&gt;/charge &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
     例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge &quot;HTTP/1.1 200 OK&quot;
 [inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; 剩余=&lt;N&gt; 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;超时&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;失败&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;失败&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -197,7 +215,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
   07:26  W1005
 
 ## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;慢&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;缓慢&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -209,7 +227,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 
 ## 消息模板
 [payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;INFO&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;降级&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -220,26 +238,39 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
   07:26  W1005
 
 ## 消息模板
-[order] INFO ×8049 07:23:49→07:26:18  收到下单请求 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; qty=&lt;N&gt;
-    例：2026-09-25 07:23:49.633 INFO  [order] trace=29633c78cf7 | 收到下单请求 order_id=ORD-1F9565B7D1 sku=SKU-002 qty=1
-[inventory] INFO ×8049 07:23:49→07:26:18  收到库存预留请求 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; qty=&lt;N&gt;
-    例：2026-09-25 07:23:49.776 INFO  [inventory] trace=29640ffc347 | 收到库存预留请求 order_id=ORD-A6A3C2D392 sku=SKU-001 qty=1
+（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;耗时&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+按服务：inventory=24147  order=24147  payment=16098
+按级别：INFO=56343  WARNING=8049
+
+## 异常时间线
+  07:23  W499
+  07:24  W3267
+  07:25  W3278
+  07:26  W1005
+
+## 消息模板
+[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=&lt;N&gt;ms
+    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms
+[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-&lt;ID&gt; 金额=&lt;N&gt;分 风控耗时=&lt;N&gt;ms 总耗时=&lt;N&gt;ms
+    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms
+[inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; 剩余=&lt;N&gt; 耗时=&lt;N&gt;ms
+    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms
+[order] INFO ×8049 07:23:50→07:26:19  下单成功 order_id=ORD-&lt;ID&gt; 耗时=&lt;N&gt;ms
+    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;HTTP&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+按服务：inventory=24147  order=24147  payment=16098
+按级别：INFO=56343  WARNING=8049
+
+## 异常时间线
+  07:23  W499
+  07:24  W3267
+  07:25  W3278
+  07:26  W1005
+
+## 消息模板
 [inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:&lt;N&gt;/charge &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
     例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge &quot;HTTP/1.1 200 OK&quot;
-[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-&lt;ID&gt; 金额=&lt;N&gt;分 风控耗时=&lt;N&gt;ms 总耗时=&lt;N&gt;ms
-    例：2026-09-2</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;风控耗时&quot;, &quot;limit&quot;: 40}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-&lt;ID&gt; 金额=&lt;N&gt;分 风控耗时=&lt;N&gt;ms 总耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms</pre></details><h3>investigate / metrics</h3><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:&lt;N&gt;/reserve &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
+    例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve &quot;HTTP/1.1 200 OK&quot;</pre></details><h3>investigate / metrics</h3><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [order]
   downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049
   leak_bytes_total = 4.22e+09
@@ -275,44 +306,48 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 [inventory]
   stock_level{sku=&quot;SKU-001&quot;} = 980600
   stock_level{sku=&quot;SKU-002&quot;} = 982714
-  stock_level{sku=&quot;SKU-003&quot;} = 982757</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[payment]
-  pool_in_flight = 0
-  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
-  pool_in_flight = 0
-  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  stock_level{sku=&quot;SKU-003&quot;} = 982757</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [payment]
   requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;timeout&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [order]
-  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[inventory]
+  pool_in_flight = 0
+  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[payment]
+  pool_in_flight = 0
+  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;total&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order]
+  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049
+  leak_bytes_total = 4.22e+09
+  requests_total{endpoint=&quot;create_order&quot;,result=&quot;ok&quot;} = 8049
+  requests_total{endpoint=&quot;create_order&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;total&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [inventory]
   downstream_calls_total{result=&quot;error&quot;,target=&quot;payment&quot;} = 0
   downstream_calls_total{result=&quot;ok&quot;,target=&quot;payment&quot;} = 8049
   downstream_exhausted_total{target=&quot;payment&quot;} = 0
-  requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;external&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[payment]
-  requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;requests&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[order]
-  requests_total{endpoint=&quot;create_order&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;create_order&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;requests&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
   requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0
   requests_total{endpoint=&quot;reserve&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;reserve&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;requests&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;reserve&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;total&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [payment]
   requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0
   requests_total{endpoint=&quot;charge&quot;,result=&quot;ok&quot;} = 8049
   requests_total{endpoint=&quot;charge&quot;} = 8049
   requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;bytes&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;timeout&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;memory&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;bytes&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [order]
   leak_bytes_total = 4.22e+09</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;exhausted&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [inventory]
-  downstream_exhausted_total{target=&quot;payment&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;failed&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  downstream_exhausted_total{target=&quot;payment&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;external&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [payment]
-  requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0</pre></details><h3>investigate / change</h3><details><summary><code>get_changes</code> <span class="dim">{}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;order&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;inventory&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;payment&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;风控&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;timeout&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;retry&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;limit&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;threshold&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><h3>cross_exam / logs</h3><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;ERROR&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+  requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;in_flight&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order]
+  pool_in_flight = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;conn&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;gc&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;cpu&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[inventory]
+  downstream_calls_total{result=&quot;error&quot;,target=&quot;payment&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[payment]
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;stock&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><h3>investigate / change</h3><details><summary><code>get_changes</code> <span class="dim">{}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;order&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;inventory&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;payment&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;风控&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;timeout&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;retry&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;limit&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><h3>cross_exam / logs</h3><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;ERROR&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -347,21 +382,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 
 ## 消息模板
 [payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-&lt;ID&gt; 金额=&lt;N&gt;分 风控耗时=&lt;N&gt;ms 总耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;风控&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms
-[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-&lt;ID&gt; 金额=&lt;N&gt;分 风控耗时=&lt;N&gt;ms 总耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;INFO&quot;, &quot;service&quot;: &quot;order&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -377,7 +398,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 [order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:&lt;N&gt;/reserve &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
     例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve &quot;HTTP/1.1 200 OK&quot;
 [order] INFO ×8049 07:23:50→07:26:19  下单成功 order_id=ORD-&lt;ID&gt; 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660e8b627 | 下单成功 order_id=ORD-9075FFEBAC 耗时=1032ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660e8b627 | 下单成功 order_id=ORD-9075FFEBAC 耗时=1032ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;level&quot;: &quot;INFO&quot;, &quot;service&quot;: &quot;inventory&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -393,7 +414,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 [inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:&lt;N&gt;/charge &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
     例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge &quot;HTTP/1.1 200 OK&quot;
 [inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; 剩余=&lt;N&gt; 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;超时&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;失败&quot;, &quot;limit&quot;: 30}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -404,7 +425,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
   07:26  W1005
 
 ## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;重试&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;重试&quot;, &quot;limit&quot;: 30}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -415,7 +436,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
   07:26  W1005
 
 ## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;失败&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;超时&quot;, &quot;limit&quot;: 30}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -426,18 +447,7 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
   07:26  W1005
 
 ## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;内存&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;缓慢&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
+（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;风控&quot;, &quot;limit&quot;: 30}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
 按服务：inventory=24147  order=24147  payment=16098
 按级别：INFO=56343  WARNING=8049
 
@@ -449,146 +459,70 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 
 ## 消息模板
 [payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;GC&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;OOM&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;leak&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-（没有匹配的日志模板）</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;order&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-[order] INFO ×8049 07:23:49→07:26:18  收到下单请求 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; qty=&lt;N&gt;
-    例：2026-09-25 07:23:49.633 INFO  [order] trace=29633c78cf7 | 收到下单请求 order_id=ORD-1F9565B7D1 sku=SKU-002 qty=1
-[inventory] INFO ×8049 07:23:49→07:26:18  收到库存预留请求 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; qty=&lt;N&gt;
-    例：2026-09-25 07:23:49.776 INFO  [inventory] trace=29640ffc347 | 收到库存预留请求 order_id=ORD-A6A3C2D392 sku=SKU-001 qty=1
+    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms
 [payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-&lt;ID&gt; 金额=&lt;N&gt;分 风控耗时=&lt;N&gt;ms 总耗时=&lt;N&gt;ms
-    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms
-[inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-&lt;ID&gt; sku=SKU-&lt;N&gt; 剩余=&lt;N&gt; 耗时=&lt;N&gt;m</pre></details><details><summary><code>query_logs</code> <span class="dim">{&quot;keyword&quot;: &quot;HTTP&quot;, &quot;limit&quot;: 50}</span></summary><pre># 日志概览  窗口 07:23:49–07:26:19
-按服务：inventory=24147  order=24147  payment=16098
-按级别：INFO=56343  WARNING=8049
-
-## 异常时间线
-  07:23  W499
-  07:24  W3267
-  07:25  W3278
-  07:26  W1005
-
-## 消息模板
-[inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:&lt;N&gt;/charge &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
-    例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge &quot;HTTP/1.1 200 OK&quot;
-[order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:&lt;N&gt;/reserve &quot;HTTP/&lt;N&gt; &lt;N&gt; OK&quot;
-    例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve &quot;HTTP/1.1 200 OK&quot;</pre></details><h3>cross_exam / metrics</h3><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms</pre></details><h3>cross_exam / metrics</h3><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;leak&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [order]
-  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049
-  leak_bytes_total = 4.22e+09
+  leak_bytes_total = 4.22e+09</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;latency&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;duration&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order]
   pool_in_flight = 0
-  pool_limit = 64
+  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;request&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order]
   requests_total{endpoint=&quot;create_order&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;create_order&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;create_order&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;stock&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[inventory]
+  stock_level{sku=&quot;SKU-001&quot;} = 980600
+  stock_level{sku=&quot;SKU-002&quot;} = 982714
+  stock_level{sku=&quot;SKU-003&quot;} = 982757</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[inventory]
+  pool_in_flight = 0
+  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[payment]
+  pool_in_flight = 0
+  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[payment]
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [inventory]
   downstream_calls_total{result=&quot;error&quot;,target=&quot;payment&quot;} = 0
   downstream_calls_total{result=&quot;ok&quot;,target=&quot;payment&quot;} = 8049
   downstream_exhausted_total{target=&quot;payment&quot;} = 0
-  pool_in_flight = 0
-  pool_limit = 64
-  requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0
-  requests_total{endpoint=&quot;reserve&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;reserve&quot;} = 8049
-  stock_level{sku=&quot;SKU-001&quot;} = 980600
-  stock_level{sku=&quot;SKU-002&quot;} = 982714
-  stock_level{sku=&quot;SKU-003&quot;} = 982757</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;external&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [payment]
-  pool_in_flight = 0
-  pool_limit = 64
+  requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;downstream&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order]
+  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;cost&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;time&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;ms&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;elapsed&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;_total&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[order]
+  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049
+  leak_bytes_total = 4.22e+09
+  requests_total{endpoint=&quot;create_order&quot;,result=&quot;ok&quot;} = 8049
+  requests_total{endpoint=&quot;create_order&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;leak&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;leak&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;memory&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[payment]
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;charge&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[payment]
   requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0
   requests_total{endpoint=&quot;charge&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;charge&quot;} = 8049
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;latency&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;duration&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;time&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;leak&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[order]
-  leak_bytes_total = 4.22e+09</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;stock&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;charge&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;reserve&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [inventory]
-  stock_level{sku=&quot;SKU-001&quot;} = 980600
-  stock_level{sku=&quot;SKU-002&quot;} = 982714
-  stock_level{sku=&quot;SKU-003&quot;} = 982757</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
-  pool_in_flight = 0
-  pool_limit = 64
-[order]
-  pool_in_flight = 0
-  pool_limit = 64
-[payment]
-  pool_in_flight = 0
-  pool_limit = 64</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;error&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
-  downstream_calls_total{result=&quot;error&quot;,target=&quot;payment&quot;} = 0
-[payment]
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;fail&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
-  requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0
-[payment]
-  requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;retry&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;total&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
-  downstream_calls_total{result=&quot;error&quot;,target=&quot;payment&quot;} = 0
-  downstream_calls_total{result=&quot;ok&quot;,target=&quot;payment&quot;} = 8049
-  downstream_exhausted_total{target=&quot;payment&quot;} = 0
   requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0
   requests_total{endpoint=&quot;reserve&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;reserve&quot;} = 8049
-[order]
-  downstream_calls_total{result=&quot;ok&quot;,target=&quot;inventory&quot;} = 8049
-  leak_bytes_total = 4.22e+09
-  requests_total{endpoint=&quot;create_order&quot;,result=&quot;ok&quot;} = 8049
-  requests_total{endpoint=&quot;create_order&quot;} = 8049
+  requests_total{endpoint=&quot;reserve&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;request&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[inventory]
+  requests_total{endpoint=&quot;reserve&quot;,result=&quot;downstream_failed&quot;} = 0
+  requests_total{endpoint=&quot;reserve&quot;,result=&quot;ok&quot;} = 8049
+  requests_total{endpoint=&quot;reserve&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;payment&quot;, &quot;keyword&quot;: &quot;request&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [payment]
   requests_total{endpoint=&quot;charge&quot;,result=&quot;external_failed&quot;} = 0
   requests_total{endpoint=&quot;charge&quot;,result=&quot;ok&quot;} = 8049
   requests_total{endpoint=&quot;charge&quot;} = 8049
   requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[payment]
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;error&quot;} = 0
-  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;keyword&quot;: &quot;exhaust&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
-[inventory]
-  downstream_exhausted_total{target=&quot;payment&quot;} = 0</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;bytes&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+  requests_total{endpoint=&quot;risk_control&quot;,result=&quot;ok&quot;} = 8049</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;gc&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;bytes&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
 [order]
-  leak_bytes_total = 4.22e+09</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;memory&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;gc&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><h3>cross_exam / change</h3><details><summary><code>get_changes</code> <span class="dim">{}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;order&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;payment&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;timeout&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;limit&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details>
+  leak_bytes_total = 4.22e+09</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;heap&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;order&quot;, &quot;keyword&quot;: &quot;conn&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。</pre></details><details><summary><code>query_metrics</code> <span class="dim">{&quot;service&quot;: &quot;inventory&quot;, &quot;keyword&quot;: &quot;stock_level&quot;}</span></summary><pre>说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。
+[inventory]
+  stock_level{sku=&quot;SKU-001&quot;} = 980600
+  stock_level{sku=&quot;SKU-002&quot;} = 982714
+  stock_level{sku=&quot;SKU-003&quot;} = 982757</pre></details><h3>cross_exam / change</h3><details><summary><code>get_changes</code> <span class="dim">{}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;order&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;payment&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;inventory&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;risk&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;timeout&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;limit&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details><details><summary><code>get_changes</code> <span class="dim">{&quot;keyword&quot;: &quot;pool&quot;}</span></summary><pre>（本时段没有任何配置变更记录）</pre></details>
 
 <h2>四、诚实清单（刻意放在前面）</h2>
 <h3>作废的题目</h3>
@@ -630,6 +564,6 @@ multi <code>2026-09-25T13:07:51+08:00</code>（法定节假日<strong>全天</st
 每个变异体会把缺陷重新注回一份代码副本，用例必须变红，否则报 <code>NOT SEALED</code>。
 剩下的 <strong>12</strong> 条（#1、#21、#44、#46、#56、P1、P2、P3、P5、P6、P9、P10）是<strong>流程缺陷</strong>，
 它们<strong>无法</strong>用变异测试证明，状态列里如实写着「靠人」。</p>
-<table><tr><th>编号</th><th>缺陷</th><th>状态</th></tr><tr><td><code>#1</code></td><td>误删工作目录之外的目录（不可恢复）</td><td class="warn">🟡 部分封堵</td></tr><tr><td><code>#2</code></td><td>中文脚本被 PowerShell 误读 → 语法崩溃</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#3</code></td><td>同一编码机制第三次复现</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#4</code></td><td>下游 4xx 被当成成功（静默吞错）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#5</code></td><td>库存耗尽伪装成&quot;注入失效&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#6</code></td><td>日志解析漏掉 21% 的行（含关键证据）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#7</code></td><td>loadgen 超发 53%（数据量不可复现）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#8</code></td><td>F4 完全无效果（缺触发条件）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#9</code></td><td>授权用相对路径前缀时静默失效</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#10</code></td><td>还原时传空 id → 内部崩溃而非可解释拒绝</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#11</code></td><td>噪声带算错：把常数伪装成统计量</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#12</code></td><td>指标未被场景窗口化 → Agent 读到脏数据</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#13</code></td><td>随手定的 max_steps 改变了&quot;准确率&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#14</code></td><td>交叉质证 prompt 渲染崩溃（JSON 模板被当占位符）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#15</code></td><td>所有 chat() 调用点参数与真实签名不符（单测到不了的地方）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#16</code></td><td>评分把「被否掉的提及」算作命中 → 失败被记成 100%</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#17</code></td><td>交叉质证步数预算写死 4 且未接线（报告还给出无效建议）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#18</code></td><td>CrossExam 存档漏 finished → 查不出是谁没收敛</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#19</code></td><td>存档截断结论 → 判定无法复核（违反 FR-C 可复现）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#20</code></td><td>场景声明的标准答案从未被对照实验验证 → F2 的答案是反的 ★★</td><td class="ok">🟢 已封堵（七个场景真值全部由对照实验验证；F2</td></tr><tr><td><code>#21</code></td><td>否定语境判定再次被措辞绕过 → 又一次假阳性 100%</td><td class="warn">🟡 部分封堵（词表已知追不上措辞，真解法是 D1</td></tr><tr><td><code>#22</code></td><td>改了任务之后没重新测步数预算 → 撞上限（#13 同类复发）</td><td class="ok">🟢 已封堵（被 #13 的机制当场拦住）</td></tr><tr><td><code>#23</code></td><td>编辑手误把函数&quot;吞&quot;进上一个函数（三次，ast.parse 不报错）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#24</code></td><td>打转不可见：14 步 87 次工具调用，分不清&quot;深挖&quot;还是&quot;原地转&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#25</code></td><td>变异体会过期：源码重构后查找串失配，它却一直&quot;假装通过&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#26</code></td><td>#2~#13 的封堵声明没有被机器校验（只有手工验证）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#27</code></td><td>JSON 解析率从 100% 掉到 67% → 评分开始拿原始推理文本判分</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#28</code></td><td>词表第三次被措辞绕过 + 判据合取却用析取判断「提没提过」</td><td class="ok">🟢 已封堵（含两把尺子接线）</td></tr><tr><td><code>#29</code></td><td>trace 从来没被存档 → 存档里没有任何原始证据（与 FR-C 直接冲突）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#30</code></td><td>跨计价时段比较成本 → 我报道了一个假的「成本翻倍」</td><td class="ok">🟢 已封堵（报告打印时段）</td></tr><tr><td><code>#31</code></td><td>计价模型漏掉法定节假日 → 假日期间成本虚高一倍，且被我误读成&quot;成本涨了&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#32</code></td><td>「给输出加上限」被实测否决：截断 JSON → 那几次结论作废（收敛率/JSON 归零），只换来 23% 输出</td><td class="ok">🟢 已封堵（上限降级为兜底）</td></tr><tr><td><code>#33</code></td><td>录制文件是追加的，我按整文件统计 → 得出假的「输出 +77%」</td><td class="ok">🟢 已封堵（此前&quot;回归用例待补&quot;，D14 审计时</td></tr><tr><td><code>#34</code></td><td>pricing_tier 存了却没被 load_report 读回 → 重载时时段警告消失（#18 同族）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#35</code></td><td>节假日表里混进了我猜的日期 → 成本被低估（往对自己有利的方向错）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#36</code></td><td>变异定义过期靠人记得跑对账（贵到没人跑）→ 改为秒级检查进普通测试</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#37</code></td><td>公开页面在四个地方说了假话（计价时段渲染成空白格 / 样本口径手打 / 故障说明写死 / 封堵清单重复 5 条且把&quot;靠人&quot;说成机</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#38</code></td><td>「由存档生成」只在我这台机器上成立 —— 存档被 gitignore 挡在仓库外，陌生人克隆后生成器直接报错，可复现用例只会 s</td><td class="ok">🟢 已封堵（证据已随仓库提交）</td></tr><tr><td><code>#39</code></td><td>生成器写 CRLF，而 .gitattributes 要求 LF → 陌生人克隆后每跑一次生成器就多一次&quot;假修改&quot;（git st</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#40</code></td><td>文档里的成本构成（输出 72.3%）在仓库里复现不出来 —— 那个数字属于录制的第 1 次运行，而工具只能看&quot;最近一次&quot;/&quot;整文</td><td class="ok">🟢 已封堵（新增 --run N / --lis</td></tr><tr><td><code>#41</code></td><td>README 把&quot;设计&quot;画成了&quot;实现&quot; —— 架构图上的 LangGraph 编排 / MCP 层 / 独立进程的策略执行点，一</td><td class="ok">🟢 已封堵（README 改成&quot;已实现 / 未接</td></tr><tr><td><code>#42</code></td><td>冻结指纹对换行敏感 → test_baseline_module_is_frozen 在每一个干净克隆里都是红的（CRLF 与 </td><td class="ok">🟢 已封堵（指纹改为按归一化换行后的字节算）</td></tr><tr><td><code>#43</code></td><td>judge_audit.py 自己抄了一份&quot;原因标签&quot;表 —— 而 scenarios.py 那段的注释恰好写着&quot;各自写一份的话</td><td class="ok">🟢 已封堵（引用同一份；并把 P7 的修法从 m</td></tr><tr><td><code>#44</code></td><td>multi 在 F4 上确实更差（1/3）：协调者把真根因降级/驳回，还把没有基线的&quot;安静指标&quot;提升成根因 —— 而我先怀疑的是</td><td class="warn">🟡 已测清、未封堵（待做&quot;假阳性轴&quot;）</td></tr><tr><td><code>#45</code></td><td>命题的&quot;行动面&quot;只有机制、没有落点 —— src/rca/policy/ 是完整可测的策略执行点（27 条用例），却只有测试 i</td><td class="ok">🟢 已接线（ops 动作走策略点；诊断角色仍拿不</td></tr><tr><td><code>#46</code></td><td>差点把一个 3 轮样本的&quot;幅度&quot;当成稳定结论 —— &quot;multi 低 9.5 个百分点&quot;全部来自 F4 一个 n=3 的格子，而</td><td class="warn">🟡 统计问题未封堵（&quot;多少样本才够&quot;没有定论，多</td></tr><tr><td><code>#47</code></td><td>一条用例的 or &quot;⚠️&quot; 分支让变异体永久变绿 + --verify-only 不检查 expect_red 指向的用例是否存</td><td class="ok">🟢 已封堵（收紧断言 + 秒级检查覆盖 expe</td></tr><tr><td><code>#48</code></td><td>关键词匹配是纯子串 → retry 匹配不上 retries ⇒ 点名了参数名（W_INVENTORY_DOWNSTREAM_R</td><td class="ok">🟢 已封堵（英文词形归一；中文仍子串）</td></tr><tr><td><code>#49</code></td><td>还原之后隔离区里留下&quot;幽灵条目&quot; —— 列表显示成&quot;待还原&quot;（剩余 72h），第二次还原报「隔离项内容已丢失」（听起来像数据丢了</td><td class="ok">🟢 已封堵（记录 restored_at；概况与</td></tr><tr><td><code>#50</code></td><td>工具面没有经过 MCP 收口 —— ops 动作是进程内直调，FR-2.1「无旁路保证」只覆盖一条路</td><td class="ok">🟢 已封堵（ops 三工具经 MCP 暴露；只有</td></tr><tr><td><code>#51</code></td><td>LangGraph 与断点续跑都没接线（AC-10 未验证）—— 而 ADR-0001 早就写好了触发条件：&quot;需要断点续跑时接它</td><td class="ok">🟢 已封堵（StateGraph + 官方 SQ</td></tr><tr><td><code>#53</code></td><td>--mode replay 从来没有真正跑通过 —— 而&quot;陌生人零成本重放&quot;被当成已实现的能力写进了文档。真实原因是 key 里</td><td class="ok">🟢 机制已封堵（gz 等价 / 包自检 / 数据</td></tr><tr><td><code>#55</code></td><td>护栏第一版实测：坏答案 0/2 抓到、好答案 7/19 误伤 —— 三个根因都是我把规则写错了（三个 SKU 被当成&quot;基线&quot; /</td><td class="ok">🟢 已封堵（形式缺陷必抓 / 缺结论不许空绿 /</td></tr><tr><td><code>#56</code></td><td>M2 软提醒（证据审查者）：新增一条 LLM 调用路径 —— 而新路径的典型事故是&quot;它坏了，整轮白跑&quot;（三个专员+质证+裁决的钱</td><td class="warn">🟡 机制已封堵、2×2 实测未跑（要花钱）——护</td></tr><tr><td><code>#54</code></td><td>&quot;唯一权威&quot;自己也漂了 —— 加完用例后仍写着 254（实为 255）；D9 行里留着&quot;当前全仓 27 组 / 60 个&quot;（实为</td><td class="ok">🟢 已封堵（三个数字 + 交付物用例数都有守卫：</td></tr><tr><td><code>#52</code></td><td>新守卫用绝对路径比对跳过目录 ⇒ 在变异副本里静默跳过全部文档、扫到 0 个 —— 而这个坑 test_offline.py 早</td><td class="ok">🟢 已封堵（改比对相对路径）</td></tr><tr><td><code>P1</code></td><td>用系统 python 而非 .venv → 得到误导性结论</td><td class="warn">⚠️ 部分（靠人看自检输出）</td></tr><tr><td><code>P2</code></td><td>批量替换写出重复行</td><td class="bad">❌ 靠人</td></tr><tr><td><code>P3</code></td><td>提交信息里的双引号被 PowerShell 截断</td><td class="bad">❌ 靠人</td></tr><tr><td><code>P4</code></td><td>脚本打印非 ASCII 时崩溃，整段输出与结论一起丢失</td><td class="ok">🟢 已自动化（test_regression_p</td></tr><tr><td><code>P5</code></td><td>字符串里嵌引号 → 提前结束（累计 ≥14 次：中文里嵌 ASCII 引号、以及三引号里嵌三引号；D15 又 5 次）</td><td class="bad">🔴 靠人（影响低：当场报错；代价是白跑一轮）</td></tr><tr><td><code>P6</code></td><td>按 ^def  搜用例 / 用 ast.FunctionDef 找函数时漏掉 async def（2 次）</td><td class="bad">🔴 靠人</td></tr><tr><td><code>P7</code></td><td>审计脚本把「算不出来」输出成 n/a，却被计进「不一致」 → 得出误导性一致率</td><td class="ok">🟢 已自动化（3 条用例 + 3 个变异体，见 </td></tr><tr><td><code>P8</code></td><td>我自己的标准答案（fixture）没被检查 → 差点把「裁判错了一条」记进结论</td><td class="ok">🟢 已自动化（test_every_dismis</td></tr><tr><td><code>P9</code></td><td>编辑后没立刻自检就往下走（cost_yuan 重复 / 函数被追加到 if __name__ 之后 / 补丁脚本先写盘后自检导致</td><td class="bad">🔴 靠人</td></tr><tr><td><code>P10</code></td><td>让 UTF-8 文件经过 PowerShell 的 Get-Content/Set-Content 往返 → 中文被折腾成乱码、</td><td class="bad">🔴 靠人（第 1 条守则的同族，但适用范围更宽：</td></tr></table>
+<table><tr><th>编号</th><th>缺陷</th><th>状态</th></tr><tr><td><code>#1</code></td><td>误删工作目录之外的目录（不可恢复）</td><td class="warn">🟡 部分封堵</td></tr><tr><td><code>#2</code></td><td>中文脚本被 PowerShell 误读 → 语法崩溃</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#3</code></td><td>同一编码机制第三次复现</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#4</code></td><td>下游 4xx 被当成成功（静默吞错）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#5</code></td><td>库存耗尽伪装成&quot;注入失效&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#6</code></td><td>日志解析漏掉 21% 的行（含关键证据）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#7</code></td><td>loadgen 超发 53%（数据量不可复现）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#8</code></td><td>F4 完全无效果（缺触发条件）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#9</code></td><td>授权用相对路径前缀时静默失效</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#10</code></td><td>还原时传空 id → 内部崩溃而非可解释拒绝</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#11</code></td><td>噪声带算错：把常数伪装成统计量</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#12</code></td><td>指标未被场景窗口化 → Agent 读到脏数据</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#13</code></td><td>随手定的 max_steps 改变了&quot;准确率&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#14</code></td><td>交叉质证 prompt 渲染崩溃（JSON 模板被当占位符）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#15</code></td><td>所有 chat() 调用点参数与真实签名不符（单测到不了的地方）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#16</code></td><td>评分把「被否掉的提及」算作命中 → 失败被记成 100%</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#17</code></td><td>交叉质证步数预算写死 4 且未接线（报告还给出无效建议）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#18</code></td><td>CrossExam 存档漏 finished → 查不出是谁没收敛</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#19</code></td><td>存档截断结论 → 判定无法复核（违反 FR-C 可复现）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#20</code></td><td>场景声明的标准答案从未被对照实验验证 → F2 的答案是反的 ★★</td><td class="ok">🟢 已封堵（七个场景真值全部由对照实验验证；F2</td></tr><tr><td><code>#21</code></td><td>否定语境判定再次被措辞绕过 → 又一次假阳性 100%</td><td class="warn">🟡 部分封堵（词表已知追不上措辞，真解法是 D1</td></tr><tr><td><code>#22</code></td><td>改了任务之后没重新测步数预算 → 撞上限（#13 同类复发）</td><td class="ok">🟢 已封堵（被 #13 的机制当场拦住）</td></tr><tr><td><code>#23</code></td><td>编辑手误把函数&quot;吞&quot;进上一个函数（三次，ast.parse 不报错）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#24</code></td><td>打转不可见：14 步 87 次工具调用，分不清&quot;深挖&quot;还是&quot;原地转&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#25</code></td><td>变异体会过期：源码重构后查找串失配，它却一直&quot;假装通过&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#26</code></td><td>#2~#13 的封堵声明没有被机器校验（只有手工验证）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#27</code></td><td>JSON 解析率从 100% 掉到 67% → 评分开始拿原始推理文本判分</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#28</code></td><td>词表第三次被措辞绕过 + 判据合取却用析取判断「提没提过」</td><td class="ok">🟢 已封堵（含两把尺子接线）</td></tr><tr><td><code>#29</code></td><td>trace 从来没被存档 → 存档里没有任何原始证据（与 FR-C 直接冲突）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#30</code></td><td>跨计价时段比较成本 → 我报道了一个假的「成本翻倍」</td><td class="ok">🟢 已封堵（报告打印时段）</td></tr><tr><td><code>#31</code></td><td>计价模型漏掉法定节假日 → 假日期间成本虚高一倍，且被我误读成&quot;成本涨了&quot;</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#32</code></td><td>「给输出加上限」被实测否决：截断 JSON → 那几次结论作废（收敛率/JSON 归零），只换来 23% 输出</td><td class="ok">🟢 已封堵（上限降级为兜底）</td></tr><tr><td><code>#33</code></td><td>录制文件是追加的，我按整文件统计 → 得出假的「输出 +77%」</td><td class="ok">🟢 已封堵（此前&quot;回归用例待补&quot;，D14 审计时</td></tr><tr><td><code>#34</code></td><td>pricing_tier 存了却没被 load_report 读回 → 重载时时段警告消失（#18 同族）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#35</code></td><td>节假日表里混进了我猜的日期 → 成本被低估（往对自己有利的方向错）</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#36</code></td><td>变异定义过期靠人记得跑对账（贵到没人跑）→ 改为秒级检查进普通测试</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#37</code></td><td>公开页面在四个地方说了假话（计价时段渲染成空白格 / 样本口径手打 / 故障说明写死 / 封堵清单重复 5 条且把&quot;靠人&quot;说成机</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#38</code></td><td>「由存档生成」只在我这台机器上成立 —— 存档被 gitignore 挡在仓库外，陌生人克隆后生成器直接报错，可复现用例只会 s</td><td class="ok">🟢 已封堵（证据已随仓库提交）</td></tr><tr><td><code>#39</code></td><td>生成器写 CRLF，而 .gitattributes 要求 LF → 陌生人克隆后每跑一次生成器就多一次&quot;假修改&quot;（git st</td><td class="ok">🟢 已封堵</td></tr><tr><td><code>#40</code></td><td>文档里的成本构成（输出 72.3%）在仓库里复现不出来 —— 那个数字属于录制的第 1 次运行，而工具只能看&quot;最近一次&quot;/&quot;整文</td><td class="ok">🟢 已封堵（新增 --run N / --lis</td></tr><tr><td><code>#41</code></td><td>README 把&quot;设计&quot;画成了&quot;实现&quot; —— 架构图上的 LangGraph 编排 / MCP 层 / 独立进程的策略执行点，一</td><td class="ok">🟢 已封堵（README 改成&quot;已实现 / 未接</td></tr><tr><td><code>#42</code></td><td>冻结指纹对换行敏感 → test_baseline_module_is_frozen 在每一个干净克隆里都是红的（CRLF 与 </td><td class="ok">🟢 已封堵（指纹改为按归一化换行后的字节算）</td></tr><tr><td><code>#43</code></td><td>judge_audit.py 自己抄了一份&quot;原因标签&quot;表 —— 而 scenarios.py 那段的注释恰好写着&quot;各自写一份的话</td><td class="ok">🟢 已封堵（引用同一份；并把 P7 的修法从 m</td></tr><tr><td><code>#44</code></td><td>multi 在 F4 上确实更差（1/3）：协调者把真根因降级/驳回，还把没有基线的&quot;安静指标&quot;提升成根因 —— 而我先怀疑的是</td><td class="warn">🟡 已测清、未封堵（待做&quot;假阳性轴&quot;）</td></tr><tr><td><code>#45</code></td><td>命题的&quot;行动面&quot;只有机制、没有落点 —— src/rca/policy/ 是完整可测的策略执行点（27 条用例），却只有测试 i</td><td class="ok">🟢 已接线（ops 动作走策略点；诊断角色仍拿不</td></tr><tr><td><code>#46</code></td><td>差点把一个 3 轮样本的&quot;幅度&quot;当成稳定结论 —— &quot;multi 低 9.5 个百分点&quot;全部来自 F4 一个 n=3 的格子，而</td><td class="warn">🟡 统计问题未封堵（&quot;多少样本才够&quot;没有定论，多</td></tr><tr><td><code>#47</code></td><td>一条用例的 or &quot;⚠️&quot; 分支让变异体永久变绿 + --verify-only 不检查 expect_red 指向的用例是否存</td><td class="ok">🟢 已封堵（收紧断言 + 秒级检查覆盖 expe</td></tr><tr><td><code>#48</code></td><td>关键词匹配是纯子串 → retry 匹配不上 retries ⇒ 点名了参数名（W_INVENTORY_DOWNSTREAM_R</td><td class="ok">🟢 已封堵（英文词形归一；中文仍子串）</td></tr><tr><td><code>#49</code></td><td>还原之后隔离区里留下&quot;幽灵条目&quot; —— 列表显示成&quot;待还原&quot;（剩余 72h），第二次还原报「隔离项内容已丢失」（听起来像数据丢了</td><td class="ok">🟢 已封堵（记录 restored_at；概况与</td></tr><tr><td><code>#50</code></td><td>工具面没有经过 MCP 收口 —— ops 动作是进程内直调，FR-2.1「无旁路保证」只覆盖一条路</td><td class="ok">🟢 已封堵（ops 三工具经 MCP 暴露；只有</td></tr><tr><td><code>#51</code></td><td>LangGraph 与断点续跑都没接线（AC-10 未验证）—— 而 ADR-0001 早就写好了触发条件：&quot;需要断点续跑时接它</td><td class="ok">🟢 已封堵（StateGraph + 官方 SQ</td></tr><tr><td><code>#53</code></td><td>--mode replay 从来没有真正跑通过 —— 而&quot;陌生人零成本重放&quot;被当成已实现的能力写进了文档。真实原因是 key 里</td><td class="ok">🟢 机制已封堵（gz 等价 / 包自检 / 数据</td></tr><tr><td><code>#55</code></td><td>护栏第一版实测：坏答案 0/2 抓到、好答案 7/19 误伤 —— 三个根因都是我把规则写错了（三个 SKU 被当成&quot;基线&quot; /</td><td class="ok">🟢 已封堵（形式缺陷必抓 / 缺结论不许空绿 /</td></tr><tr><td><code>#56</code></td><td>M2 软提醒（证据审查者）：新增一条 LLM 调用路径 —— 新路径的典型事故是&quot;它坏了，整轮白跑&quot;（#15 就这么亏过）；另外</td><td class="warn">🟡 机制已封堵、2×2 实测未跑（账户余额不足，</td></tr><tr><td><code>#54</code></td><td>&quot;唯一权威&quot;自己也漂了 —— 加完用例后仍写着 254（实为 255）；D9 行里留着&quot;当前全仓 27 组 / 60 个&quot;（实为</td><td class="ok">🟢 已封堵（三个数字 + 交付物用例数都有守卫：</td></tr><tr><td><code>#52</code></td><td>新守卫用绝对路径比对跳过目录 ⇒ 在变异副本里静默跳过全部文档、扫到 0 个 —— 而这个坑 test_offline.py 早</td><td class="ok">🟢 已封堵（改比对相对路径）</td></tr><tr><td><code>P1</code></td><td>用系统 python 而非 .venv → 得到误导性结论</td><td class="warn">⚠️ 部分（靠人看自检输出）</td></tr><tr><td><code>P2</code></td><td>批量替换写出重复行</td><td class="bad">❌ 靠人</td></tr><tr><td><code>P3</code></td><td>提交信息里的双引号被 PowerShell 截断</td><td class="bad">❌ 靠人</td></tr><tr><td><code>P4</code></td><td>脚本打印非 ASCII 时崩溃，整段输出与结论一起丢失</td><td class="ok">🟢 已自动化（test_regression_p</td></tr><tr><td><code>P5</code></td><td>字符串里嵌引号 → 提前结束（累计 ≥14 次：中文里嵌 ASCII 引号、以及三引号里嵌三引号；D15 又 5 次）</td><td class="bad">🔴 靠人（影响低：当场报错；代价是白跑一轮）</td></tr><tr><td><code>P6</code></td><td>按 ^def  搜用例 / 用 ast.FunctionDef 找函数时漏掉 async def（2 次）</td><td class="bad">🔴 靠人</td></tr><tr><td><code>P7</code></td><td>审计脚本把「算不出来」输出成 n/a，却被计进「不一致」 → 得出误导性一致率</td><td class="ok">🟢 已自动化（3 条用例 + 3 个变异体，见 </td></tr><tr><td><code>P8</code></td><td>我自己的标准答案（fixture）没被检查 → 差点把「裁判错了一条」记进结论</td><td class="ok">🟢 已自动化（test_every_dismis</td></tr><tr><td><code>P9</code></td><td>编辑后没立刻自检就往下走（cost_yuan 重复 / 函数被追加到 if __name__ 之后 / 补丁脚本先写盘后自检导致</td><td class="bad">🔴 靠人</td></tr><tr><td><code>P10</code></td><td>让 UTF-8 文件经过 PowerShell 的 Get-Content/Set-Content 往返 → 中文被折腾成乱码、</td><td class="bad">🔴 靠人（第 1 条守则的同族，但适用范围更宽：</td></tr></table>
 
 </main></body></html>
