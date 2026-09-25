@@ -1143,3 +1143,42 @@ def test_accounts_without_a_trace_still_load(tmp_path, monkeypatch):
 
     assert not (path.parent / "traces").exists(), "没有轨迹时不该造一个空目录"
     assert load_report(path).attempts[0].trace_path == ""
+
+def test_multi_attempt_carries_every_components_trace():
+    """#29 补完：多 Agent 的**六个环节**（3 调查 + 3 质证）轨迹都要进存档。
+
+    之前只有 baseline 那一路有轨迹 —— 而多 Agent 恰恰是最需要事后追溯的那个
+    （#16 / #21 两次假阳性都是在**读原文**时发现的）。
+    """
+    from unittest.mock import patch
+
+    from eval.runner import _run_multi_slice
+    from eval.scenarios import SCENARIOS
+    from rca.agents.coordinator import CrossExam, MultiAgentResult
+    from rca.agents.specialist import Hypothesis
+
+    class FakeRes(MultiAgentResult):
+        pass
+
+    fake = FakeRes()
+    fake.hypotheses = [
+        Hypothesis(role=r, name=r, claim="c", trace=[{"step": 1, "tool": "query_logs"}])
+        for r in ("logs", "metrics", "change")
+    ]
+    fake.cross_exams = [
+        CrossExam(role=r, original_claim="c", trace=[{"step": 1, "tool": "query_metrics"}])
+        for r in ("logs", "metrics", "change")
+    ]
+
+    with patch("rca.agents.coordinator.diagnose_multi", lambda *a, **k: fake):
+        attempt = _run_multi_slice(
+            client=None, ctx=None, fid="F8", rnd=1, score=SCENARIOS["F8"],
+            model=None, max_steps=22, cross_exam_steps=22,
+        )
+
+    phases = [t["phase"] for t in attempt.trace]
+    assert phases.count("investigate") == 3, f"三个调查环节的轨迹都要在：{phases}"
+    assert phases.count("cross_exam") == 3, f"三个质证环节的轨迹都要在：{phases}"
+    roles = {t["role"] for t in attempt.trace}
+    assert roles == {"logs", "metrics", "change"}
+    assert all(t["steps"] for t in attempt.trace), "每个环节都要带自己的工具调用"

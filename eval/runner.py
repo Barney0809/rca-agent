@@ -392,6 +392,17 @@ def _run_multi_slice(
                          cross_exam_steps=cross_exam_steps)
     verdict_text = res.verdict.root_cause
     jd = judge_detail(score, verdict_text, judge_fn)
+
+    # ★ 各环节的完整轨迹（#29 补完）：三个调查 + 三个质证，各带自己的工具调用
+    #   ⚠️ 之前**只有 baseline 这一路**有轨迹存档，多 Agent 的六个环节全丢了 ——
+    #      而多 Agent 恰恰是最需要事后追溯的那个（#16/#21 都是在读原文时发现的）。
+    combined_trace: list[dict] = [
+        {"phase": "investigate", "role": h.role, "steps": list(h.trace)}
+        for h in res.hypotheses
+    ] + [
+        {"phase": "cross_exam", "role": c.role, "steps": list(c.trace)}
+        for c in res.cross_exams
+    ]
     correct, _ = score.judge(verdict_text)
 
     return Attempt(
@@ -413,6 +424,7 @@ def _run_multi_slice(
         and res.verdict.parse_ok,
         parse_ok=res.verdict.parse_ok,
         repeat_calls=res.repeat_calls,          # ★ 打转统计（D9）
+        trace=combined_trace,                   # ★ 各环节轨迹（#29）
         detail={
             "accepted": res.verdict.accepted,
             "n_rejected": len(res.verdict.rejected),

@@ -688,5 +688,26 @@
         ]
       }
     ]
+  },
+  "multi_agent_trace": {
+    "harness_log": [
+      "#29"
+    ],
+    "why": "#29 completion: Hypothesis.trace and CrossExam.trace were collected but never archived -- only baseline had a trace at all. The multi-agent run is exactly the one that most needs post-hoc inspection (both #16 and #21 were found by reading the raw text), so all six components (3 investigations + 3 cross-examinations) must land in the trace file.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "mtrace-a-drop-the-cross-examinations",
+        "desc": "Archive only the investigations, dropping the three cross-examination traces. The refutation reasoning -- the part that decided the verdict -- becomes unauditable.",
+        "file": "eval/runner.py",
+        "find": "    ] + [\n        {\"phase\": \"cross_exam\", \"role\": c.role, \"steps\": list(c.trace)}\n        for c in res.cross_exams\n    ]",
+        "replace": "    ]",
+        "expect_red": [
+          "tests/test_eval.py::test_multi_attempt_carries_every_components_trace"
+        ]
+      }
+    ]
   }
 }
