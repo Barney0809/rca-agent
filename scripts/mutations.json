@@ -1183,5 +1183,67 @@
         ]
       }
     ]
+  },
+  "quarantine_restore_bookkeeping": {
+    "harness_log": [
+      "#49"
+    ],
+    "why": "#49: restore() moved the content back but left no trace, so the quarantine listing kept showing the entry as pending (72h remaining) and a second restore reported 'the quarantined content has been lost' -- which sounds like data loss but actually just means 'it was already restored'. This project forbids deleting records, so the entry must stay AND must say what happened to it. Same family as #37's blank cell and #38's 'a skip is also green': a thing that looks like A while actually being B. The fix records restored_at, excludes restored entries from the pending count and from the expiry/cleanup report, and gives the second restore a truthful message.",
+    "tests": [
+      "tests/test_ops_policy.py"
+    ],
+    "mutations": [
+      {
+        "id": "quarantine1-restore-leaves-no-trace",
+        "desc": "Stop recording restored_at, so a restored entry goes back to looking pending and the second restore lies about the content being lost.",
+        "file": "src/rca/policy/quarantine.py",
+        "find": "    if entry.restored_at:\n        raise QuarantineError(\n            f\"该项已经还原过了（{entry.restored_at}）：{quarantine_id}\"\n        )\n",
+        "replace": "",
+        "expect_red": [
+          "tests/test_ops_policy.py::test_restore_marks_the_entry_instead_of_leaving_a_ghost"
+        ]
+      },
+      {
+        "id": "quarantine2-count-restored-as-pending",
+        "desc": "Count restored entries as still sitting in quarantine, so the number grows every time something is restored -- a number that measures nothing.",
+        "file": "src/rca/policy/quarantine.py",
+        "find": "    pending = [e for e in entries if not e.is_restored]",
+        "replace": "    pending = list(entries)",
+        "expect_red": [
+          "tests/test_ops_policy.py::test_restore_marks_the_entry_instead_of_leaving_a_ghost"
+        ]
+      }
+    ]
+  },
+  "mcp_tool_face": {
+    "harness_log": [
+      "#50"
+    ],
+    "why": "#50: D15 wired the ops actions to the policy engine, but they were IN-PROCESS calls -- so 'the tool face is not channelled through MCP' stayed true, and FR-2.1's no-bypass guarantee covered only one path. This group pins the two properties that make the channelling real rather than decorative: (1) a real MCP session can list and call exactly the three ops tools, and the deny-first decision survives the protocol round trip (including the file still existing); (2) NOTHING outside the two sanctioned doors touches OpsToolBox -- the allowlist is explicit and a third door turns the test red. The second mutant also covers the classic MCP-stdio footgun: a single print() into stdout corrupts the protocol channel and the client then reports an error unrelated to the real cause.",
+    "tests": [
+      "tests/test_mcp_ops.py"
+    ],
+    "mutations": [
+      {
+        "id": "mcp1-print-into-the-protocol-channel",
+        "desc": "Add a debug print to the stdio entry point. stdout IS the MCP protocol channel, so this corrupts the session and the client reports a parse error instead of the truth.",
+        "file": "scripts/ops_mcp_server.py",
+        "find": "def main() -> None:",
+        "replace": "def main() -> None:\n    print(\"debug: server starting\")  # 变异体：污染协议通道",
+        "expect_red": [
+          "tests/test_mcp_ops.py::test_the_mcp_entry_points_never_print"
+        ]
+      },
+      {
+        "id": "mcp2-open-a-third-door-to-the-toolbox",
+        "desc": "Import OpsToolBox in a non-sanctioned module, i.e. open a third door that bypasses the MCP channel -- which is exactly what 'no bypass' forbids.",
+        "file": "src/rca/ops_runtime.py",
+        "find": "from rca.policy import PolicyEngine",
+        "replace": "from rca.policy import PolicyEngine\nfrom rca.tools_ops import OpsToolBox  # 变异体：第三条门",
+        "expect_red": [
+          "tests/test_mcp_ops.py::test_only_the_two_sanctioned_doors_reach_the_ops_toolbox"
+        ]
+      }
+    ]
   }
 }

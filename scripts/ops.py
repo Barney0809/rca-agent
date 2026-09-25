@@ -56,34 +56,14 @@ try:
 except Exception:
     pass
 
-from rca.policy import PolicyEngine, Verb  # noqa: E402
+from rca.ops_runtime import build_engine  # noqa: E402
+from rca.policy import Verb  # noqa: E402
 from rca.tools_ops import OpsToolBox  # noqa: E402
 
-# 授权根：诊断产物都在 runs/ 下。**注意这里写的是绝对路径** ——
-# 相对路径前缀会让 covers() 永远匹配不上（#9：授权静默失效）。
-ARTIFACT_ROOT = ROOT / "runs"
-QUARANTINE_ROOT = ARTIFACT_ROOT / "_quarantine"
-AUDIT_PATH = ARTIFACT_ROOT / "_audit.ndjson"
-
-# ⚠️ 授权库刻意放在 **runs/ 之外**（`.grants/` 在项目根下）。
-#    理由见 `PolicyEngine.__init__` 里那条硬检查：授权库落在授权根之内的话，
-#    Agent 只要往那个文件追加一行就给自己开了门 —— deny-first 会变成形式主义。
-#    （`.grants/` 已加进 .gitignore：它是运行时状态，不是仓库内容。）
-GRANT_STORE = ROOT / ".grants" / "grants.ndjson"
-
-
-def build_engine() -> PolicyEngine:
-    QUARANTINE_ROOT.mkdir(parents=True, exist_ok=True)
-    return PolicyEngine(
-        allowed_roots=[ARTIFACT_ROOT],
-        quarantine_root=QUARANTINE_ROOT,
-        audit_path=AUDIT_PATH,
-        quarantine_ttl_s=72 * 3600,
-        # ★ 授权库放在 runs/ **之外**（`_grants/`）：放在授权根里的话，
-        #   被约束的一方就能改它 —— 那等于把钥匙放在被锁的人手边。
-        #   engine 里有一条硬检查拦这件事。
-        grant_store=GRANT_STORE,
-    )
+# ⚠️ 路径与引擎构造**不在本文件里定义** —— 它们只有一处：
+#    `src/rca/ops_runtime.py`。因为现在有**两条**入口能执行 ops 动作
+#    （本 CLI 与 `scripts/ops_mcp_server.py`），两边必须指向同一批路径、同一个引擎，
+#    否则会出现"CLI 里删掉的东西在 MCP 那条路上看不见"这类鬼事（#43 的教训）。
 
 
 def _parse_knobs(items: list[str]) -> dict:
@@ -172,8 +152,13 @@ def main() -> int:
             left = (en.expires_at - datetime.now().astimezone()).total_seconds()
             print(f"  · {en.quarantine_id}")
             print(f"      原路径：{en.original_path}")
-            print(f"      剩余  ：{left / 3600:.1f} 小时　过期={'是' if en.is_expired() else '否'}"
-                  + ("（目录）" if en.is_dir else ""))
+            if en.is_restored:
+                # #49：还原过的记录留在隔离区里（本项目不删记录），
+                # 但**不能**再显示成"待还原" —— 否则列出来像"还有东西要处理"。
+                print(f"      状态  ：已还原（{en.restored_at}）")
+            else:
+                print(f"      剩余  ：{left / 3600:.1f} 小时　过期={'是' if en.is_expired() else '否'}"
+                      + ("（目录）" if en.is_dir else ""))
         print("还原：scripts/ops.py restore <id>")
         return 0
 

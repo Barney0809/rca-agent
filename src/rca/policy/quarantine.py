@@ -38,7 +38,7 @@ import re
 import secrets
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -62,6 +62,12 @@ class QuarantineEntry:
     ttl_s: int
     is_dir: bool
     note: str = ""
+    # ★ #49：还原后盖时间戳（本项目不删除记录，所以必须**记下它已经回去了**）
+    restored_at: str = ""
+
+    @property
+    def is_restored(self) -> bool:
+        return bool(self.restored_at)
 
     @property
     def expires_at(self) -> datetime:
@@ -161,9 +167,21 @@ def restore(quarantine_root: Path, quarantine_id: str, to: Path | None = None) -
 
     默认还原到原始位置；原始父目录若已不存在会自动重建。
     `to` 可以指定别的位置（用于"还原到别处"的场景）。
+
+    ⚠️ 还原**不清除记录**，而是给它盖一个 `restored_at` 时间戳（#49）：
+        本项目不许删除任何东西，所以条目会留在隔离区里 —— 但**必须记下"它已经回去了"**。
+        否则第二次还原会报一句**误导性**的话：「隔离项内容已丢失」——
+        听起来像数据丢了，其实只是**已经还原过**。
+        （同族：#37 的空白格、#38 的"skip 也是绿" —— 都是"看起来像 A，其实是 B"。）
     """
     entry = load_entry(quarantine_root, quarantine_id)
     entry_dir = _entry_dir(quarantine_root, quarantine_id)
+
+    if entry.restored_at:
+        raise QuarantineError(
+            f"该项已经还原过了（{entry.restored_at}）：{quarantine_id}"
+        )
+
     payload = entry_dir / "payload" / entry.stored_name
     if not payload.exists():
         raise QuarantineError(f"隔离项内容已丢失：{quarantine_id}")
@@ -174,6 +192,13 @@ def restore(quarantine_root: Path, quarantine_id: str, to: Path | None = None) -
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(payload), str(dest))
+
+    # 记下"它已经回去了"（覆盖写 entry.json，不动任何内容）
+    updated = replace(entry, restored_at=datetime.now().astimezone().isoformat(timespec="seconds"))
+    (entry_dir / "entry.json").write_text(
+        json.dumps(asdict(updated), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8", newline="\n",
+    )
     return dest
 
 
@@ -181,27 +206,40 @@ def sweep_report(
     quarantine_root: Path,
     now: datetime | None = None,
 ) -> list[QuarantineEntry]:
-    """**报告**已过 TTL 的隔离项。**不删除任何东西。**
+    """**报告**已过 TTL 且**还没还原**的隔离项。**不删除任何东西。**
 
     这是刻意的设计（见模块头部）：Agent 连删除能力都不该有。
     本函数存在的意义是让"要不要清理"变成一个**人的决定**，
     而不是一个后台任务悄悄做的事。
+
+    ⚠️ #49：**已经还原过的条目不算"待清理"** —— 它的内容早就回去了，
+       只是记录还留着（本项目不许删除记录）。把它们算进"过期待清理"
+       会让人以为隔离区里还有东西要处理。
     """
     now = now or datetime.now().astimezone()
-    return [e for e in list_entries(quarantine_root) if e.is_expired(now)]
+    return [
+        e for e in list_entries(quarantine_root)
+        if not e.is_restored and e.is_expired(now)
+    ]
 
 
 def summarize(quarantine_root: Path) -> dict:
-    """隔离区概况（给审计与人工查看用）。"""
+    """隔离区概况（给审计与人工查看用）。
+
+    ⚠️ #49：`count` 里**已经还原过的不算"还在隔离区"** ——
+       否则这个数字会随着"还原"这个动作**越还原越多**，与实际占用无关。
+    """
     entries = list_entries(quarantine_root)
+    pending = [e for e in entries if not e.is_restored]
     expired = sweep_report(quarantine_root)
     return {
-        "count": len(entries),
+        "count": len(pending),
+        "restored_count": len(entries) - len(pending),
         "bytes": sum(
-            _dir_size(quarantine_root / e.quarantine_id / "payload") for e in entries
+            _dir_size(quarantine_root / e.quarantine_id / "payload") for e in pending
         ),
         "expired_count": len(expired),
-        "oldest": entries[0].quarantined_at if entries else None,
+        "oldest": pending[0].quarantined_at if pending else None,
     }
 
 

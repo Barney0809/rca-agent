@@ -314,7 +314,79 @@ def test_the_grant_store_may_not_live_inside_the_agents_reachable_roots(workspac
 
 
 # --------------------------------------------------------------------------- #
-# 8. 诊断角色与 ops 工具的隔离（这是 #45 之后"不可逆操作给不到"的落点）
+# 7. #49：还原要**留下记录**，而不是留一条"幽灵"条目
+# --------------------------------------------------------------------------- #
+def test_restore_marks_the_entry_instead_of_leaving_a_ghost(
+    ops: OpsToolBox, engine: PolicyEngine, workspace: Path
+) -> None:
+    """#49：还原之后，隔离区里那条记录必须**如实说"已经还原了"**。
+
+    现场（D15 做 demo 时撞到的）：还原过后再 `restore` 一次，报的是
+    「**隔离项内容已丢失**」—— 听起来像数据丢了，其实只是**已经还原过**。
+    而 `quarantine` 列表里那条记录看上去仍是"待还原"（剩余 72 小时）：
+    **列出来像有东西要处理，实际没有。**
+
+    ⇒ 同族：#37 的空白格、#38 的"skip 也是绿" —— 都是"看着像 A，其实是 B"。
+    """
+    from rca.policy import QuarantineError, list_entries, restore as restore_entry, summarize
+
+    target = workspace / "allowed" / "once.json"
+    target.write_text("内容", encoding="utf-8")
+    grant = engine.grant(verb=Verb.DELETE, path_prefix=workspace / "allowed", ttl_s=60)
+    res = ops.delete_artifact(str(target), grant_id=grant.grant_id)
+
+    # 还原
+    ops.restore_artifact(res.quarantine_id)
+
+    entries = {e.quarantine_id: e for e in list_entries(workspace / "quarantine")}
+    entry = entries[res.quarantine_id]
+    assert entry.is_restored, "还原后没有留下任何标记 —— 列表里会显示成待还原"
+    assert entry.restored_at, "应当记下还原时刻"
+
+    # ★ 第二次还原要**说清是"已经还原过"**，而不是谎称内容丢失
+    with pytest.raises(QuarantineError) as ei:
+        restore_entry(workspace / "quarantine", res.quarantine_id)
+    assert "已经还原过" in str(ei.value), f"报错信息仍有误导性：{ei.value}"
+    assert "内容已丢失" not in str(ei.value)
+
+    # ★ 概况里不该把已还原的算成"还在隔离区"
+    summary = summarize(workspace / "quarantine")
+    assert summary["count"] == 0, f"已还原的条目仍被算作待处理：{summary}"
+    assert summary["restored_count"] == 1
+
+
+def test_an_already_restored_entry_is_not_reported_as_pending_cleanup(
+    ops: OpsToolBox, engine: PolicyEngine, workspace: Path
+) -> None:
+    """已还原的条目**不算"过期待清理"** —— 它的内容早就回去了。
+
+    （构造方式：TTL 设 0 秒 ⇒ 立刻"过期"；再还原它 ⇒ 不该出现在清理报告里。）
+    """
+    from rca.policy import PolicyEngine as PE
+    from rca.policy import sweep_report
+
+    ws_engine = PE(
+        allowed_roots=[workspace / "allowed"],
+        quarantine_root=workspace / "quarantine",
+        audit_path=workspace / "audit.ndjson",
+        grant_store=workspace / "grants.json",
+        quarantine_ttl_s=0,          # 立刻过期
+    )
+    box = OpsToolBox(ws_engine, world={"order": "http://fake"}, actor="t")
+    target = workspace / "allowed" / "expiring.json"
+    target.write_text("x", encoding="utf-8")
+    grant = ws_engine.grant(verb=Verb.DELETE, path_prefix=workspace / "allowed", ttl_s=60)
+    res = box.delete_artifact(str(target), grant_id=grant.grant_id)
+
+    assert [e.quarantine_id for e in sweep_report(workspace / "quarantine")] == [res.quarantine_id]
+
+    box.restore_artifact(res.quarantine_id)
+
+    assert sweep_report(workspace / "quarantine") == [], (
+        "已还原的条目还报成待清理 —— 人工去看会发现隔离区里什么也没有"
+    )
+# --------------------------------------------------------------------------- #
+# 8. 诊断角色与 ops 工具的隔离（这是 #45 之后「不可逆操作给不到」的落点）
 # --------------------------------------------------------------------------- #
 def test_diagnosis_roles_have_only_read_level_tools() -> None:
     """三个诊断专员的工具必须是**只读**的 —— 它们连"写"都做不了，更别说删除。"""

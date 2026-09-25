@@ -44,12 +44,12 @@
   <text class="ts" x="52" y="312">角色隔离：RestrictedToolBox（专员拿不到别人那一路）</text>
   <text class="ts" x="52" y="334">目前没有"不可逆操作" —— 所以还没有东西需要被拦</text>
 
-  <!-- MCP 未接线 -->
-  <rect class="todo" x="660" y="240" width="288" height="104"/>
-  <text class="tb" x="680" y="266">MCP 工具面收口（未接线）</text>
-  <text class="ts" x="680" y="290">代码里零行 MCP</text>
-  <text class="ts" x="680" y="312">工具是进程内直调，没有经过收口</text>
-  <text class="ts" x="680" y="334">⇒「无旁路保证」尚未成立（FR-2.1）</text>
+  <!-- MCP 已接线 -->
+  <rect class="impl" x="660" y="240" width="288" height="104"/>
+  <text class="tb" x="680" y="266">MCP 工具面收口（已接线）</text>
+  <text class="ts" x="680" y="290">ops 三工具经 MCP 暴露（mcp_server.py）</text>
+  <text class="ts" x="680" y="312">无旁路：只有两扇被点名的门能碰工具箱</text>
+  <text class="ts" x="680" y="334">⇒「无旁路保证」在 ops 路径上成立（FR-2.1）</text>
 
   <!-- 3. 策略执行点 -->
   <rect class="impl" x="32" y="372" width="600" height="96"/>
