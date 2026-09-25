@@ -83,21 +83,21 @@
     ],
     "mutations": [
       {
-        "id": "sig-a-reinject-max-tokens-in-adjudicate",
-        "desc": "Re-inject the historical defect: pass max_tokens=2048 to chat() inside adjudicate().",
+        "id": "sig-a-inject-a-parameter-that-does-not-exist",
+        "desc": "Inject a kwarg that genuinely does not exist on chat() (timeout_s). NOTE: this mutation used to inject max_tokens=2048 -- but D11 made max_tokens a REAL parameter, so that mutation silently stopped being a defect and this group stopped being sealed. The full seal report caught it (#25 pattern).",
         "file": "src/rca/agents/coordinator.py",
-        "find": "        tools=None,          # 协调者不查数据 —— 它只裁决\n        tag=\"coordinator\",\n    )",
-        "replace": "        tools=None,          # 协调者不查数据 —— 它只裁决\n        tag=\"coordinator\",\n        max_tokens=2048,\n    )",
+        "find": "        tag=\"coordinator\",",
+        "replace": "        timeout_s=30,\n        tag=\"coordinator\",",
         "expect_red": [
           "tests/test_agents.py::test_every_chat_call_matches_the_client_signature"
         ]
       },
       {
         "id": "sig-b-unknown-kwarg-in-another-file",
-        "desc": "Inject a bogus kwarg at the call site in specialist.py instead. If the check only looked at coordinator.py, this mutant would stay green.",
+        "desc": "Inject a bogus kwarg at the call site in specialist.py instead. If the check only looked at coordinator.py, this mutant would stay green. NOTE: it used to inject max_tokens=1024, which D11 turned into a REAL parameter, so both mutants in this group silently stopped being defects -- the full seal report caught it (#25 pattern).",
         "file": "src/rca/agents/specialist.py",
-        "find": "                tag=f\"specialist/{self.role.key}/{local_ctx.run_id}\",\n            )",
-        "replace": "                tag=f\"specialist/{self.role.key}/{local_ctx.run_id}\",\n                max_tokens=1024,\n            )",
+        "find": "                tag=f\"specialist/{self.role.key}/{local_ctx.run_id}\",",
+        "replace": "                timeout_s=30,\n                tag=f\"specialist/{self.role.key}/{local_ctx.run_id}\",",
         "expect_red": [
           "tests/test_agents.py::test_every_chat_call_matches_the_client_signature"
         ]
@@ -780,6 +780,39 @@
         "replace": "        max_tokens=300,\n        tag=\"coordinator\",",
         "expect_red": [
           "tests/test_agents.py::test_coordinator_cap_is_not_tighter_than_cross_exam"
+        ]
+      }
+    ]
+  },
+  "archive_field_wiring": {
+    "harness_log": [
+      "#34",
+      "#35"
+    ],
+    "why": "#34: pricing_tier was archived but not restored by load_report, so `--from-json` (exactly the path used for comparisons) silently dropped the 'only compare within the same tariff' warning -- same family as #18. #35: the first holiday table also contained dates I had merely inferred; guessing a working day as a holiday LOWERS the reported cost, and an under-estimate is worse than an over-estimate because it flatters the project.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "wire2-drop-the-tier-on-reload",
+        "desc": "#34: stop restoring pricing_tier in load_report, so reloaded reports lose the tariff warning.",
+        "file": "eval/runner.py",
+        "find": "        pricing_tier=data.get(\"pricing_tier\", \"\"),\n    )",
+        "replace": "    )",
+        "expect_red": [
+          "tests/test_eval.py::test_pricing_tier_survives_a_save_load_round_trip"
+        ]
+      },
+      {
+        "id": "holiday2-guess-a-working-day-as-a-holiday",
+        "desc": "#35: put an unverified date back into the holiday table. A working day billed as off-peak makes the cost look smaller than it is.",
+        "file": "src/rca/llm/provider.py",
+        "find": "    \"2026-10-01\", \"2026-10-02\", \"2026-10-03\", \"2026-10-04\",",
+        "replace": "    \"2026-09-28\", \"2026-10-01\", \"2026-10-02\", \"2026-10-03\", \"2026-10-04\",",
+        "expect_red": [
+          "tests/test_eval.py::test_holiday_table_contains_only_verified_dates",
+          "tests/test_eval.py::test_guessed_dates_are_not_counted_as_holidays"
         ]
       }
     ]

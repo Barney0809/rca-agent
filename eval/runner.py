@@ -461,6 +461,10 @@ def load_report(path: Path) -> Report:
         rounds=data["rounds"],
         started_at=data["started_at"],
         agent=data.get("agent", "baseline"),
+        # ⚠️ 必须恢复计价时段（#34）：不恢复的话，`--from-json` 重新聚合时
+        #    那条"只与同时段比较成本"的警告会**消失** —— 而重载正是我做比较时走的路径。
+        #    这是 #18 的同族：**字段存了，但没接上**。
+        pricing_tier=data.get("pricing_tier", ""),
     )
     report.attempts = [Attempt(**a) for a in data["attempts"]]
     return report

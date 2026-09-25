@@ -1305,3 +1305,80 @@ def test_the_holiday_table_is_not_empty_and_is_dated():
     assert all(d.startswith("2026-") for d in HOLIDAYS_2026), (
         "表名里写了年份，条目也必须是同一年 —— 否则跨年时会静默算错"
     )
+
+# ================================================================
+# #34 计价时段存了却没接上 —— `--from-json` 重载时警告会消失
+# ================================================================
+#
+# 与 #18「CrossExam 存档漏 finished」同族：**字段存了，但没接线**。
+# 具体危害：`pricing_tier` 的作用就是提醒"只与同时段比较成本"，
+# 而 `--from-json`（重新聚合已有结果）**正是我做比较时走的路径** ——
+# 不恢复它，那条警告在最需要的时候恰好消失。
+
+
+def test_pricing_tier_survives_a_save_load_round_trip(tmp_path, monkeypatch):
+    """`--from-json` 必须把计价时段也恢复回来。"""
+    from eval.runner import Report, load_report, save_report
+
+    r = Report(model="m", mode="live", rounds=1, started_at="t",
+               pricing_tier="peak", attempts=[_attempt_with("F1", correct=True)])
+    monkeypatch.setattr("eval.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("eval.runner.ROOT", tmp_path)
+    path = save_report(r)
+
+    assert load_report(path).pricing_tier == "peak", (
+        "重载后计价时段丢了 —— 那条「只与同时段比较成本」的警告就会消失"
+    )
+
+
+def test_old_archives_without_the_tier_still_load(tmp_path, monkeypatch):
+    """老存档没有这个字段 → 回落为空串，**不许编一个值出来**。"""
+    from eval.runner import Report, load_report, save_report
+
+    r = Report(model="m", mode="live", rounds=1, started_at="t",
+               attempts=[_attempt_with("F1", correct=True)])
+    monkeypatch.setattr("eval.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("eval.runner.ROOT", tmp_path)
+    assert load_report(save_report(r)).pricing_tier == ""
+
+
+# ================================================================
+# #35 节假日表里混进了**我猜的**日期 → 成本会被低估
+# ================================================================
+#
+# 第一版我按"中秋国庆十天半价窗口"这个说法，把 09-26~09-30 与 10-08 也写进了节假日表。
+# **那是推的，不是核实的。** 而猜错的方向很糟：
+#   · 把工作日当假日 → 成本被**低估**（本该峰时却按谷时算）
+#   · 把假日当工作日 → 成本被**高估**
+# "高估"至少保守；"低估"会让成本看起来比实际更好看。
+# ⇒ 原则：**只列能佐证的日期；不确定的宁可高估。**
+
+
+def test_holiday_table_contains_only_verified_dates():
+    """只允许出现**已核实**的中秋与国庆日期。
+
+    这条用例的写法很直白：把允许的日期全部写死。
+    以后要加日期，就必须先核实、再改这里 —— **改这里时你会被迫想一遍**。
+    """
+    from rca.llm.provider import HOLIDAYS_2026
+
+    verified = {"2026-09-25"} | {f"2026-10-{d:02d}" for d in range(1, 8)}
+    extra = sorted(set(HOLIDAYS_2026) - verified)
+    assert not extra, (
+        f"节假日表里出现了未经核实的日期：{extra}\n"
+        "请以官方放假通知为准；在核实之前，宁可**高估**成本（当成工作日）"
+    )
+    missing = sorted(verified - set(HOLIDAYS_2026))
+    assert not missing, f"已核实的假日缺了：{missing}"
+
+
+def test_guessed_dates_are_not_counted_as_holidays():
+    """我先前猜过的那几天，现在**必须**按工作日算（宁可高估）。"""
+    from datetime import datetime
+
+    from rca.llm.provider import is_peak_hour
+
+    # 2026-09-28 是周一：若被当成假日就会低估成本
+    assert is_peak_hour(datetime(2026, 9, 28, 10, 0)) is True, (
+        "09-28 未经核实，必须按工作日（峰时）算 —— 否则成本被低估"
+    )
