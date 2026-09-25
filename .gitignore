@@ -64,6 +64,15 @@ runs/_eval/*
 !runs/_eval/multi-20260925-131953/
 # 裁判对存档答案的逐条复核结果（#48：两把尺子在 F4 上不一致的那 2 条靠它留痕）
 !runs/_eval/_judge/
+# ★ M2 的 2×2 两臂（#56）：「护栏关 / 护栏开」各 21 次尝试。
+#   只入库 results.json（含护栏的逐条账目：意见、前/后判定、帮了/帮了倒忙），
+#   **trace 不入库**（两臂各 ~2 MB）—— 要核对数字只读 results.json 就够。
+!runs/_eval/multi-20260925-234207/
+runs/_eval/multi-20260925-234207/*
+!runs/_eval/multi-20260925-234207/results.json
+!runs/_eval/multi-20260926-001536/
+runs/_eval/multi-20260926-001536/*
+!runs/_eval/multi-20260926-001536/results.json
 !runs/_recordings/
 runs/_recordings/*
 !runs/_recordings/record-deepseek-flash.ndjson
