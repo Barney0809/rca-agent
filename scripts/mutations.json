@@ -553,5 +553,36 @@
         ]
       }
     ]
+  },
+  "json_contract_repair": {
+    "harness_log": [
+      "#27"
+    ],
+    "why": "#27: the JSON parse rate fell from 100% to 67% after the task changed, and on a parse failure the code scored the model's RAW text -- which mixes its reasoning with its conclusion. That silently loosened the measurement ('mentioned a word while thinking' is not 'asserted it in the conclusion', the root of the #16/#21 false positives). The fix is a one-shot nudge to re-emit JSON, shared by all three call sites.",
+    "tests": [
+      "tests/test_agents.py"
+    ],
+    "mutations": [
+      {
+        "id": "json-a-drop-the-nudge-from-baseline",
+        "desc": "Remove the nudge call site from baseline, so a non-JSON answer is accepted as-is and scored on raw reasoning text. The shared-logic check must catch this.",
+        "file": "src/rca/agents/baseline.py",
+        "find": "                    messages = repair_messages(messages, result.text)\n                    continue",
+        "replace": "                    pass",
+        "expect_red": [
+          "tests/test_agents.py::test_all_three_call_sites_share_the_same_repair_logic"
+        ]
+      },
+      {
+        "id": "json-b-repair-replaces-instead-of-appending",
+        "desc": "Make the repair REPLACE the conversation instead of appending to it. The model then loses every piece of evidence it had gathered and must start over -- the nudge would do more harm than the bad format.",
+        "file": "src/rca/agents/contract.py",
+        "find": "    return [\n        *messages,\n        {\"role\": \"assistant\", \"content\": raw_text},\n        {\"role\": \"user\", \"content\": JSON_REPAIR_NUDGE},\n    ]",
+        "replace": "    return [\n        {\"role\": \"assistant\", \"content\": raw_text},\n        {\"role\": \"user\", \"content\": JSON_REPAIR_NUDGE},\n    ]",
+        "expect_red": [
+          "tests/test_agents.py::test_contract_repair_messages_append_a_correction_turn"
+        ]
+      }
+    ]
   }
 }
