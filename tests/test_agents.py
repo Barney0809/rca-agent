@@ -205,12 +205,27 @@ def test_baseline_module_is_frozen():
         三个调用点（baseline / 专职 Agent / 交叉质证）共用 `contract.py` 里的同一份逻辑。
 
         ⇒ **docs/05 重新测量并更新。**
+
+    `ba2fe0cb321bb615` → `5a5e5f1978330d11`（2026-09-25，D14）
+
+        **内容没有改** —— 改的是**指纹的算法**（harness-log #42）：
+        改成按「**归一化换行后**的字节」算哈希（见 `scripts/frozen_fingerprint.py`）。
+
+        原因：`.gitattributes` 规定 `eol=lf` ⇒ **克隆出来是 LF**，
+        而本机工作副本是 CRLF，于是同一个文件两种字节、两个指纹 ——
+        这条"冻结"用例在**每一个干净克隆里都是红的**：
+
+            expected: ba2fe0cb321bb615
+            actual  : 5a5e5f1978330d11
+
+        一个在干净克隆里必红的守卫，和一个永远绿的守卫，结果一样：没人再信它。
+        ⇒ 指纹只该守"内容变没变"，不该守"换行符是哪个平台的"。
     """
-    import hashlib
+    from scripts.frozen_fingerprint import fingerprint
 
     path = Path(__file__).resolve().parent.parent / "src" / "rca" / "agents" / "baseline.py"
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    expected = "ba2fe0cb321bb615"
+    digest = fingerprint(path)
+    expected = "5a5e5f1978330d11"
 
     assert digest == expected, (
         f"baseline.py 被改动了！\n"

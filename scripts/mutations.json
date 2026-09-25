@@ -952,5 +952,57 @@
         ]
       }
     ]
+  },
+  "readme_matches_the_code": {
+    "harness_log": [
+      "#41"
+    ],
+    "why": "#41: the README architecture diagram presented three things as built that do not exist in the code at all: a LangGraph orchestration layer, an MCP tool boundary, and a policy enforcement point running as a separate process. I had copied the DESIGN diagram from docs/02 into the README and the implementation later diverged -- and nothing in the document system marks design as distinct from implementation. This is the highest-stakes entry of the audit: a project whose front page advertises frameworks it never used collapses on the first follow-up question ('show me your state graph').",
+    "tests": [
+      "tests/test_deliverable.py"
+    ],
+    "mutations": [
+      {
+        "id": "readme1-present-langgraph-as-built",
+        "desc": "Present LangGraph as part of the implementation by dropping the 'not wired' marker from the architecture diagram, so the front page again advertises a framework the code never imports.",
+        "file": "README.md",
+        "find": "┌── Agent 编排（**手写循环**；LangGraph **未接线**）",
+        "replace": "┌── Agent 编排（LangGraph）",
+        "expect_red": [
+          "tests/test_deliverable.py::test_readme_marks_unbuilt_layers_instead_of_presenting_them_as_built"
+        ]
+      },
+      {
+        "id": "readme2-call-the-policy-point-a-separate-process",
+        "desc": "Describe the policy enforcement point as running in a separate process. It is an in-process module that nothing in the agent path even calls yet.",
+        "file": "README.md",
+        "find": "边界机制是**建好了、还没接上**",
+        "replace": "边界机制跑在**独立进程**里，Agent 只能通过它行动",
+        "expect_red": [
+          "tests/test_deliverable.py::test_readme_marks_unbuilt_layers_instead_of_presenting_them_as_built"
+        ]
+      }
+    ]
+  },
+  "platform_hygiene": {
+    "harness_log": [
+      "#42"
+    ],
+    "why": "#42: the content fingerprint guarding baseline.py hashed raw bytes, so the same file produced two fingerprints -- CRLF in my working copy, LF in a fresh clone (the repo's .gitattributes says eol=lf). The frozen-module test therefore failed in EVERY clean clone: 'baseline.py has been changed!' when nothing had changed. A guard that is red on a fresh clone and one that is always green are equally useless: nobody believes either. .gitattributes cannot fix this, because it governs what git stores, while read_bytes() sees whatever is on disk right now (see #39).",
+    "tests": [
+      "tests/test_deliverable.py"
+    ],
+    "mutations": [
+      {
+        "id": "frozen1-hash-the-raw-bytes-again",
+        "desc": "Hash the raw bytes, so line endings leak back into the fingerprint and the frozen-module guard turns red in every clean clone while staying green on the author's machine.",
+        "file": "scripts/frozen_fingerprint.py",
+        "find": "    return hashlib.sha256(raw.replace(b\"\\r\\n\", b\"\\n\")).hexdigest()[:16]",
+        "replace": "    return hashlib.sha256(raw).hexdigest()[:16]",
+        "expect_red": [
+          "tests/test_deliverable.py::test_frozen_fingerprint_ignores_line_endings"
+        ]
+      }
+    ]
   }
 }

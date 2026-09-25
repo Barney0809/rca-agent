@@ -352,6 +352,83 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     assert lines.index("runs/*") < lines.index("!runs/_eval/"), "反选规则的位置不对"
 
 
+UNBUILT_MARKERS = ("未接线", "未实现", "尚未", "计划中", "没有做")
+
+
+def test_readme_marks_unbuilt_layers_instead_of_presenting_them_as_built() -> None:
+    """#41：README 是仓库首页，**不许把"设计"写成"实现"**。
+
+    现场：架构图里写着 `Agent 层（LangGraph） │ MCP 策略执行点（独立进程）`，
+    而代码里 **LangGraph 零命中、MCP 零命中、`rca.policy` 只被测试 import** ——
+    三条一条都不成立。来源是我把 `docs/02` 的设计图抄进了 README，实现后来偏离了，
+    而**同一个文档体系里"设计"与"实现"没有区分标记**。
+
+    规则（可机械检查）：凡 README 提到、而源码里确实没有的东西，
+    它的**每一处出现**附近都必须带上"未接线/未实现"这类标记。
+    这样"把设计写成实现"就变成了一条会变红的用例，而不是靠我下次记得。
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    lines = readme.splitlines()
+    src = "\n".join(
+        p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "src").rglob("*.py")
+    )
+
+    for label, needles in (("LangGraph", ("langgraph",)), ("MCP", ("import mcp", "from mcp"))):
+        if any(n in src for n in needles):
+            continue  # 代码里真的有，随便提
+        hits = [i for i, ln in enumerate(lines) if label in ln]
+        assert hits, f"README 里找不到 {label} 了？这条守卫的前提变了"
+        for i in hits:
+            window = "\n".join(lines[max(0, i - 2): i + 3])
+            assert any(m in window for m in UNBUILT_MARKERS), (
+                f"README 第 {i + 1} 行提到了 {label}，但源码里没有它，"
+                f"附近又没标「未接线」：{lines[i].strip()}"
+            )
+
+    assert "独立进程" not in readme, (
+        "策略执行点是 `src/rca/policy/` 里的**进程内模块**（而且尚未接到 Agent 路径）——"
+        "README 不能把它写成独立进程（#41）"
+    )
+
+
+def test_readme_does_not_duplicate_progress_or_counts() -> None:
+    """README 不复制进度/计数（那是 `docs/00-状态.md` 的唯一职责）。
+
+    项目开篇的原话：其他文档"不得复制进度、计数、完成状态" ——
+    因为同一件事在四份文档里各有一份快照、互不可校验，最后连测试有多少个都说不清。
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "docs/00-状态.md" in readme, "README 必须指到唯一权威那份状态文档"
+    for bad in ("已封堵 3", "共 190", "190 条用例", "27 组"):
+        assert bad not in readme, f"README 里出现了计数「{bad}」—— 计数只该写在 docs/00-状态.md"
+
+
+def test_frozen_fingerprint_ignores_line_endings(tmp_path: Path) -> None:
+    """#42：指纹只该守「**内容**变没变」，不该守「换行符是哪个平台的」。
+
+    现场：`.gitattributes` 规定 `eol=lf` ⇒ 克隆出来是 LF，而作者的 Windows
+    工作副本是 CRLF。第一版指纹直接 `sha256(read_bytes())`，
+    于是 `test_baseline_module_is_frozen` 在**每一个干净克隆里都是红的**：
+
+        expected: ba2fe0cb321bb615
+        actual  : 5a5e5f1978330d11
+
+    ⚠️ 一个在干净克隆里必红的守卫，和一个永远绿的守卫，结果一样：**没人再信它**。
+    """
+    from scripts.frozen_fingerprint import fingerprint
+
+    lf = tmp_path / "lf.py"
+    crlf = tmp_path / "crlf.py"
+    changed = tmp_path / "changed.py"
+    lf.write_bytes(b"a = 1\nb = 2\n")
+    crlf.write_bytes(b"a = 1\r\nb = 2\r\n")
+    changed.write_bytes(b"a = 1\nb = 3\n")
+
+    assert fingerprint(lf) == fingerprint(crlf), "换行不同就算出不同指纹 —— 克隆里会误报「被改动了」"
+    assert fingerprint(lf) != fingerprint(changed), "内容真的变了却算不出差别 —— 这个守卫就废了"
+
+
 def test_demo_generator_writes_lf_so_a_fresh_clone_stays_clean(fake_root: Path) -> None:
     """生成器必须写 **LF**：#39。
 

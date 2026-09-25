@@ -576,9 +576,18 @@ def test_seal_report_parses_the_declared_statuses():
     )
 
     # 抽查几个性质不同的条目
+    # ⚠️ 只挑**长期稳定**的样例。这条用例曾经写死 `#20 == 部分封堵`，
+    #    后来 #20 被真正修好、状态升级成"已封堵"，这条用例就红了 ——
+    #    那是"好红"，但**一条因为别处变好了而变红的用例会误导人**
+    #    （看起来像解析器坏了）。所以改成按**类别**断言，不点名易变的条目。
     assert declared.get("#14") == mod.SEALED_MARK, "#14 应读成已封堵"
-    assert declared.get("#20") == mod.PARTIAL_MARK, "#20 应读成部分封堵"
     assert declared.get("P4") == mod.SEALED_MARK, "P4 应读成已封堵"
+
+    marks = set(declared.values())
+    assert marks & {mod.PARTIAL_MARK, mod.OPEN_MARK}, (
+        "既没有'部分封堵'也没有'未封堵' —— 状态列的区分能力没有被体现出来。\n"
+        "（如果确实全部修完了，请改成用合成输入测试这三档的区别。）"
+    )
 
 
 def test_seal_report_covers_every_mutation_group():
