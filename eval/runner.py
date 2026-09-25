@@ -762,6 +762,34 @@ def _print_judge_agreement(agg: dict) -> None:
         print(f"         裁判逐项：{d['judge']}")
         print(f"         原文：{d['text'][:160]}")
 
+# 单场景样本量的下限：低于它，**单场景准确率只能看方向、不能比幅度**。
+#
+# 由来（harness-log #46）：D15 主跑得到 multi 90.5% vs baseline 100%，
+# 差异**全部**来自 F4 一个 n=3 的格子；而同配置重跑 baseline 在 F4 上自己就从 3/3 掉到 2/3。
+# 3 轮下单场景准确率只能取 {0%, 33%, 67%, 100%} —— 相邻两档差 33 个百分点，
+# 这种分辨率撑不住"低 9.5 个百分点"这样的精度。
+#
+# ⇒ 与其靠我记得加一句"样本小"，不如让**报告自己说出来**。
+SMALL_SAMPLE_MIN_ROUNDS = 4
+
+
+def small_sample_warning(n_rounds: int, n_scenarios: int) -> str | None:
+    """单场景样本量太小时，返回一句必须打出来的告警；否则返回 None。
+
+    纯函数（不依赖 Report），所以能被单独测试 —— 这也是把它从打印逻辑里抽出来的原因
+    （同一个理由见 #33：内联的逻辑没法验）。
+    """
+    if n_rounds >= SMALL_SAMPLE_MIN_ROUNDS:
+        return None
+    ladder = " / ".join(f"{round(100 * i / n_rounds)}%" for i in range(n_rounds + 1))
+    return (
+        f"  ⚠️ 单场景样本太小：每场景只有 {n_rounds} 轮 ⇒ 准确率只能取 {ladder} 这些档位。\n"
+        f"     **单场景的差异只能看方向，不能比幅度**（相邻档位差 "
+        f"{round(100 / n_rounds)} 个百分点）。\n"
+        f"     要比幅度请加大 --rounds；要下结论请把噪声带一起读。"
+    )
+
+
 def print_report(report: Report) -> None:
     agg = report.agg()
     if not agg:
@@ -832,6 +860,10 @@ def print_report(report: Report) -> None:
         print(f"  {fid:<4} {row['label']:<30} {row['accuracy']:<8.0%} "
               f"{row['mean_steps']:<6.1f} {row['mean_tool_calls']:<6.1f} "
               f"¥{row['mean_cost_yuan']:.4f}")
+    small = small_sample_warning(report.rounds, len(agg["per_fault"]))
+    if small:
+        print()
+        print(small)
 
     # 多故障场景额外打两轴（结论 / 召回）。单故障场景什么也不打。
     _print_cause_axes(report)

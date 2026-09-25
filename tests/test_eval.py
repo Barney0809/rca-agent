@@ -184,8 +184,14 @@ def test_regression_13_report_warns_when_accuracy_is_not_comparable(capsys):
     out = capsys.readouterr().out
 
     assert "收敛率" in out, "报告里必须出现收敛率"
-    assert "不可用于比较" in out or "⚠️" in out, (
-        f"收敛率不足时必须告警，否则读者会把配置问题当成能力问题。实际输出：\n{out}"
+    # ⚠️ 这里**只能**断言"那一条"具体告警。
+    #    第一版写的是 `"不可用于比较" in out or "⚠️" in out` —— 那个 `or` 分支
+    #    让这条用例在**任何**别处出现 ⚠️ 时都成立：D15 加了"小样本告警"之后，
+    #    3 轮的报告里**永远**有 ⚠️，于是变异体 `hist-convergence-warning-always-off`
+    #    （把收敛告警关掉）再也变不红 —— 全量对账当场抓到（harness-log #47）。
+    #    ⇒ 存在性断言不许留"或"的后门。
+    assert "不可用于比较" in out, (
+        f"收敛率不足时必须给出**那一条**告警。实际输出：\n{out}"
     )
 
 
@@ -1387,6 +1393,32 @@ def test_guessed_dates_are_not_counted_as_holidays():
 # --------------------------------------------------------------------------- #
 # P7 / #43：裁判审计脚本的两条不变量
 # --------------------------------------------------------------------------- #
+def test_small_sample_warning_fires_for_three_rounds():
+    """#46：单场景样本太小时，**报告必须自己说出来**。
+
+    现场：D15 主跑的"multi 低 9.5 个百分点"全部来自 F4 一个 **n=3** 的格子，
+    而同配置重跑 baseline 在 F4 上自己就从 3/3 掉到 2/3。
+    3 轮的单场景准确率只能取 0/33/67/100 —— 这种分辨率撑不住"9.5 个百分点"的精度。
+
+    ⇒ 与其靠我记得加一句"样本小"，不如让工具打印出来。
+    """
+    from eval.runner import small_sample_warning
+
+    w = small_sample_warning(3, 7)
+
+    assert w is not None, "3 轮居然不告警 —— 那条结论就是靠人记着"
+    assert "3 轮" in w
+    assert "不能比幅度" in w, "告警必须说清「能看什么、不能看什么」"
+    assert "33" in w, "要把档位间隔写出来，读者才知道分辨率有多粗"
+
+def test_small_sample_warning_is_silent_for_a_big_enough_sample():
+    from eval.runner import SMALL_SAMPLE_MIN_ROUNDS, small_sample_warning
+
+    assert small_sample_warning(SMALL_SAMPLE_MIN_ROUNDS, 7) is None
+    assert small_sample_warning(10, 7) is None
+    assert small_sample_warning(1, 7) is not None, "1 轮是最极端的小样本，必须告警"
+
+
 def test_judge_audit_reuses_the_single_cause_label_table():
     """#43：原因标签**只能有一份**（`eval/scenarios.py::CAUSE_LABELS`）。
 

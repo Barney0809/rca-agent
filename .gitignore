@@ -96,3 +96,6 @@ world/**/__pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 授权库：运行时状态（且刻意放在 runs/ 之外，见 scripts/ops.py）
+.grants/

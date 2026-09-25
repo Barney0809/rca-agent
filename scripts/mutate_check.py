@@ -291,11 +291,91 @@ def verify_mutant_src_is_loaded(copy_dir: Path) -> str:
 # ⇒ 原则：**把贵的检查拆出一个便宜的近似版，让便宜的那个天天跑。**
 
 
+def collect_test_ids(root: Path | None = None) -> set[str]:
+    """收集仓库里**当前**所有用例的 node id（`pytest --collect-only`）。
+
+    ⚠️ **不要自己再加 `-q` 或 `-v`** —— 这里踩了两次（都是"尺子用错"）：
+
+        · 自己加 `-q` ⇒ 与 pyproject 里的 `addopts = "-q"` 叠加成 `-qq`，
+          输出变成**按文件计数**（`tests/test_eval.py: 66`），一个 node id 都没有；
+        · 自己加 `-v` ⇒ 输出变成**树形**（`<Module ...>` / `<Function ...>`），同样没有 `::`。
+
+        只有**不加 verbosity 参数**（沿用 pyproject 的单个 `-q`）时，
+        每行才是 `tests/xxx.py::test_yyy` —— 那才是这个函数要的东西。
+        （与 #33/#40 同族：解析器没写错，喂给它的输入不是它以为的东西。）
+
+    路径统一成 `/`（Windows 上可能打反斜杠），避免"看起来不存在"的假阳性。
+    """
+    import re
+    import subprocess
+    import sys as _sys
+
+    root = root or ROOT
+    # ⚠️ 副本目录里**没有 .venv**（复制时排除了），所以直接写死 VENV_PYTHON 会在
+    #    变异检查自己的控制组里炸掉 —— 实测：控制组报 "the copy itself is broken"。
+    #    回退到 `sys.executable`：跑测试的这个解释器一定存在，而且同样是 .venv 里的那个。
+    py = VENV_PYTHON if VENV_PYTHON.exists() else Path(_sys.executable)
+    proc = subprocess.run(
+        [str(py), "-m", "pytest", "--collect-only", "--color=no",
+         "-p", "no:cacheprovider"],
+        cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    ids: set[str] = set()
+    for ln in out.splitlines():
+        m = re.match(r"^\s*(\S+\.py)::(\S+)", ln)
+        if m:
+            ids.add(f"{m.group(1).replace(chr(92), '/')}::{m.group(2)}")
+    return ids
+
+
+def missing_expect_red_targets(spec: dict | None = None, known: set[str] | None = None,
+                               root: Path | None = None) -> list[str]:
+    """每个 `expect_red` 指向的用例必须**真的存在**。返回问题清单。
+
+    ⚠️ 为什么需要这条（harness-log #47 的副产物，D15 实测）：
+
+        `--verify-only` 原本只检查 `find` 串还套不套得上，
+        **不检查 `expect_red` 里的用例名**。于是我在 D15 把一条用例改了名
+        （`test_readme_marks_unbuilt_...` → `test_outward_facing_docs_mark_unbuilt_...`），
+        两个变异体的 `expect_red` 就**指向了一个不存在的用例** ——
+        它们在完整对账里报的是 **NOT SEALED**（"变异体没能让用例变红"），
+        而真实原因只是**名字写错了**：名字错了和"用例抓不住缺陷"在报告里长得一样，
+        但修法完全不同（改名字 vs 改用例）。
+
+        完整对账要几分钟、平时不会跑；这条检查是秒级的，而且进了普通测试。
+    """
+    spec = spec if spec is not None else load_spec()
+    known = known if known is not None else collect_test_ids(root)
+    problems: list[str] = []
+    if not known:
+        # ★ 防空转：收集不到任何用例时，所有 expect_red 都会被报成"不存在" ——
+        #   看起来像"到处都是错"，其实是**检查本身失效了**。
+        #   与其输出 80 条假阳性，不如直接说清是收集这一步坏了。
+        return [
+            "收集不到任何用例 id —— expect_red 检查无法进行。"
+            "请检查 `pytest --collect-only` 的输出格式（常见原因：自己加了 -q/-v 改变了输出格式）。"
+        ]
+    for group, g in spec.items():
+        for mut in g.get("mutations", []):
+            ids = mut.get("expect_red") or []
+            if not ids:
+                problems.append(f"{group}/{mut['id']}: 没有 expect_red（没写清该由哪条用例变红）")
+                continue
+            for t in ids:
+                if t not in known:
+                    problems.append(
+                        f"{group}/{mut['id']}: expect_red 指向的用例不存在：{t}"
+                        f" —— 报告会显示成 NOT SEALED，但真实原因是用例名过期"
+                    )
+    return problems
+
+
 def verify_spec_applies(spec: dict | None = None, root: Path | None = None) -> list[str]:
     """逐条检查变异定义是否还适用。返回问题清单（空 = 全部适用）。
 
-    ⚠️ 只做**静态检查**，不建副本、不跑测试、不花时间。
-       它能抓住的是"find 串找不到 / 找到多处"这一类过期；
+    ⚠️ 只做**静态检查**（外加一次秒级的用例收集），不建副本、不跑测试。
+       它能抓住的是"find 串找不到 / 找到多处 / expect_red 指错用例"这一类过期；
        **抓不到**"变异还能套用、但用例已经抓不住它"（那仍需完整对账）。
     """
     spec = spec if spec is not None else load_spec()
@@ -317,6 +397,7 @@ def verify_spec_applies(spec: dict | None = None, root: Path | None = None) -> l
                     f"{group}/{mut['id']}: 在 {mut['file']} 里找到 {n} 处匹配（期望 1）"
                     f" —— 变异定义已过期，需重新对准"
                 )
+    problems.extend(missing_expect_red_targets(spec, root=root))
     return problems
 
 def apply_mutation(copy_dir: Path, mut: dict) -> None:

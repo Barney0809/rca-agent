@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 import time
 from dataclasses import dataclass
@@ -72,6 +73,12 @@ TOOL_MATRIX: dict[str, Verb] = {
     "delete_artifact": Verb.DELETE,
     "move_artifact_outside": Verb.MOVE_OUTSIDE,
     "force_overwrite": Verb.FORCE,
+    # --- ops 工具（src/rca/tools_ops.py）：改变被诊断世界的动作 ---
+    #   ⚠️ 这三条是 D15 接线时登记的。未登记的工具本来会按最高等级（FORCE）处理，
+    #      也就是"什么都不许做" —— 安全，但会让新工具静默失效。
+    #      显式登记之后，等级由这里说了算，而不是由"有没有人记得登记"说了算。
+    "set_knobs": Verb.WRITE,
+    "restore_artifact": Verb.WRITE,
 }
 
 # 未登记工具的处理等级：最高。
@@ -142,6 +149,7 @@ class PolicyEngine:
         audit_path: Path,
         quarantine_ttl_s: int = 72 * 3600,
         clock: Callable[[], float] = time.time,
+        grant_store: Path | None = None,
     ) -> None:
         # ⚠️ 授权根本身也要规范化 —— 否则"带 .. 的授权根"会让前缀比对失效
         self.allowed_roots = tuple(p.resolve(strict=False) for p in allowed_roots)
@@ -150,6 +158,20 @@ class PolicyEngine:
         self.audit = AuditLog(audit_path)
         self._clock = clock
         self._grants: dict[str, Grant] = {}
+        self.grant_store = grant_store.resolve(strict=False) if grant_store else None
+
+        # ★ 硬检查：授权库**不能**落在 Agent 可写的授权根里。
+        #   否则 Agent 只要往那个文件里追加一条授权，就给自己开了门 ——
+        #   deny-first 会变成"形式上的默认拒绝"。
+        #   这是"钥匙不能放在被锁的人手边"那条常识的代码化。
+        if self.grant_store is not None:
+            for root in self.allowed_roots:
+                if self.grant_store == root or root in self.grant_store.parents:
+                    raise ValueError(
+                        f"授权库 {self.grant_store} 落在授权根 {root} 之内 —— "
+                        f"Agent 能写它，就等于能给自己发授权。请把授权库放到授权根之外。"
+                    )
+            self._load_grants()
 
     # ---------------------------------------------------------- 授权
     def grant(
@@ -182,7 +204,57 @@ class PolicyEngine:
             issued_by=issued_by,
         )
         self._grants[g.grant_id] = g
+        self._persist_grant(g)
         return g
+
+    # ---------------------------------------------------------- 授权持久化
+    def _persist_grant(self, g: Grant) -> None:
+        """把授权追加到磁盘（如果配了 `grant_store`）。
+
+        ⚠️ 为什么必须能持久化（D15 实测出来的）：
+            授权原本只存在**内存**里，于是"人先签授权、再执行动作"这条
+            跨进程的 CLI 流程**用不了** —— 第二个进程里授权"已过期"
+            （其实是压根没读到）。表现是一句**看起来像过期、实际是被丢掉**的拒绝。
+            ⇒ 这种"说不清哪里不对"的失败正是本项目一直在防的静默失败。
+
+        ⚠️ 更重要的：**授权库不能放在 Agent 可写的路径里**。
+            否则 Agent 可以自己往里追加一条授权 —— deny-first 就名存实亡了。
+            `__init__` 里有一条硬检查拦这件事（见 `grant_store` 参数）。
+        """
+        if self.grant_store is None:
+            return
+        self.grant_store.parent.mkdir(parents=True, exist_ok=True)
+        with self.grant_store.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps({
+                "grant_id": g.grant_id,
+                "verb": int(g.verb),
+                "path_prefix": g.path_prefix,
+                "expires_at": g.expires_at,
+                "issued_by": g.issued_by,
+            }, ensure_ascii=False) + "\n")
+
+    def _load_grants(self) -> None:
+        """从磁盘读回仍然有效的授权（过期的直接跳过，不报错）。"""
+        if self.grant_store is None or not self.grant_store.exists():
+            return
+        for line in self.grant_store.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                g = Grant(
+                    grant_id=rec["grant_id"],
+                    verb=Verb(int(rec["verb"])),
+                    path_prefix=rec["path_prefix"],
+                    expires_at=float(rec["expires_at"]),
+                    issued_by=rec.get("issued_by", "human"),
+                )
+            except Exception:  # noqa: BLE001 —— 坏行跳过，不让它挡住整个引擎
+                continue
+            if g.is_valid(self._clock()) or g.grant_id in self._grants:
+                # 同一 id 重复出现时**以最后一次为准**（人重新签 = 覆盖）
+                self._grants[g.grant_id] = g
 
     def _find_grant(self, grant_id: str | None) -> Grant | None:
         if not grant_id:

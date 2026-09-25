@@ -7,7 +7,7 @@
 # NOTE: This file is deliberately ASCII-only. Non-ASCII in a parsed script
 #       is a known hazard on Windows (see scripts/dev.ps1 header).
 
-.PHONY: help sync doctor check test lint fmt dev world-up world-stop world-logs smoke eval demo share
+.PHONY: help sync doctor check test lint fmt dev world-up world-stop world-logs smoke eval demo share ci ci-offline mutants seal
 
 help:
 	@echo "rca-agent targets:"
@@ -20,9 +20,12 @@ help:
 	@echo "  make smoke     verify the world chain / trace / metrics"
 	@echo "  make world-stop  stop the world (containers kept)"
 	@echo "  make world-logs  follow world logs"
-	@echo "  make eval      run the eval set (excludes holdout)"
-	@echo "  make demo      3-minute demo flow"
-	@echo "  make share     export a redacted replay bundle"
+	@echo "  make eval      run the eval set: make eval ARGS=\"--agent multi --rounds 3\""
+	@echo "  make demo      regenerate the public page from the archives"
+	@echo "  make ci        offline gate (same commands as .github/workflows/ci.yml)"
+	@echo "  make mutants   every mutation definition still applies (fast)"
+	@echo "  make seal      every 'sealed' claim has a mutation group (fast)"
+	@echo "  make share     not implemented (see docs/03-event-protocol.md section 8)"
 	@echo ""
 	@echo "  There is no 'clean'. Deletion always goes through quarantine."
 
@@ -42,6 +45,17 @@ test:
 	uv run pytest
 
 check: lint test
+
+# ---- offline gate: exactly what CI runs, minus the Docker job ----
+
+ci:
+	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci.ps1
+
+mutants:
+	uv run python scripts/mutate_check.py --verify-only
+
+seal:
+	uv run python scripts/seal_report.py --skip-mutations
 
 # ---- targets below arrive with later milestones (D1..D14) ----
 
@@ -68,13 +82,27 @@ world-logs:
 smoke:
 	uv run python scripts/smoke_world.py
 
+# ---- eval / demo ----
+#
+# `eval` COSTS MONEY: it needs DEEPSEEK_API_KEY and a running world.
+# Baseline over all 7 scenarios is about CNY 0.36; multi is about CNY 0.073
+# per attempt. Pass the flags explicitly so the sample is never accidental:
+#
+#   make eval ARGS="--agent baseline --rounds 3"
+#   make eval ARGS="--agent multi --faults F4 --rounds 3 --max-steps 40"
+#
 eval:
-	@echo "not implemented yet - arrives D10 (eval harness)"
-	@exit 1
+	@if [ -z "$(ARGS)" ]; then \
+	  echo "usage: make eval ARGS=\"--agent baseline|multi [--faults F1,F8] [--rounds 3]\""; \
+	  echo "NOTE: this spends API credit and needs a running world."; \
+	  exit 2; \
+	fi
+	uv run python eval/runner.py $(ARGS)
 
+# Regenerate the public page FROM THE ARCHIVES. Free, offline, and it must
+# reproduce the committed HTML byte for byte (a test guards that).
 demo:
-	@echo "not implemented yet - arrives D14"
-	@exit 1
+	uv run python scripts/make_demo.py
 
 share:
 	@echo "not implemented yet - see docs/03-event-protocol.md section 8"

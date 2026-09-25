@@ -1,0 +1,84 @@
+# rca-agent CI (GitHub Actions)
+#
+# status: WRITTEN BUT NEVER RUN REMOTELY
+#   The development environment has no git remote, so this pipeline has not
+#   been executed on a runner yet. Everything it invokes IS verified locally by
+#   scripts/ci.ps1 (same commands, offline job only). Treat the first push as
+#   the real test - and if the Linux runner surfaces a platform assumption,
+#   that is a finding, not a nuisance: see harness-log #39 and #42, both of
+#   which were Windows-specific constraints discovered exactly this way.
+#
+# two jobs on purpose:
+#   offline  - free, no Docker, no API key. Must be green for every push.
+#   world    - needs Docker; brings the diagnosed system up and runs the
+#              integration tests + smoke check. Kept separate so a Docker
+#              hiccup cannot mask a regression in the agent code.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline:
+    name: offline gate (ruff + pytest + mutation/seal checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: sync dependencies (pinned by uv.lock)
+        run: uv sync
+
+      - name: ruff static gate (undefined names / async misuse / duplicate defs)
+        run: uv run ruff check --select F821,ASYNC,F811 src eval scripts tests world
+
+      - name: pytest (world integration tests excluded; no Docker here)
+        run: uv run pytest --color=no --ignore=tests/test_world.py
+
+      - name: every mutation definition still applies (fast staleness check)
+        run: uv run python scripts/mutate_check.py --verify-only
+
+      - name: every "sealed" claim still has a mutation group behind it
+        run: uv run python scripts/seal_report.py --skip-mutations
+
+  world:
+    name: world integration (docker compose + smoke + world tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: sync dependencies
+        run: uv sync
+
+      - name: start the diagnosed system
+        run: docker compose up -d --build
+
+      - name: wait for the three services to answer
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 \
+               && curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1 \
+               && curl -fsS http://127.0.0.1:8082/healthz >/dev/null 2>&1; then
+              echo "world is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "world did not come up in time"; docker compose logs --no-log-prefix; exit 1
+
+      - name: smoke check (chain / trace propagation / metrics)
+        run: uv run python scripts/smoke_world.py
+
+      - name: world integration tests
+        run: uv run pytest --color=no tests/test_world.py
+
+      - name: dump container logs on failure
+        if: failure()
+        run: docker compose logs --no-log-prefix

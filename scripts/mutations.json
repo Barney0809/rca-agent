@@ -819,7 +819,8 @@
   },
   "mutation_definitions_stay_valid": {
     "harness_log": [
-      "#36"
+      "#36",
+      "#47"
     ],
     "why": "#36: three times a source refactor silently invalidated a mutation definition, which then kept 'passing' until someone ran the full 15-minute seal report -- and nobody runs a 15-minute check after every edit. Applicability needs no test run at all: just check that each `find` string occurs exactly once in the current source. That is a millisecond-level check, so it now runs on every normal test run.",
     "tests": [
@@ -834,6 +835,16 @@
         "replace": "    for group, g in []:\n        if not g.get(\"harness_log\"):",
         "expect_red": [
           "tests/test_offline.py::test_the_applicability_check_actually_detects_staleness"
+        ]
+      },
+      {
+        "id": "verify-b-expect-red-check-always-passes",
+        "desc": "#47: make the new expect_red existence check always report nothing. A renamed test then silently degrades into 'NOT SEALED', which reads as 'the tests cannot catch this defect' while the real cause is a stale test name.",
+        "file": "scripts/mutate_check.py",
+        "find": "    known = known if known is not None else collect_test_ids(root)\n    problems: list[str] = []",
+        "replace": "    return []\n    known = known if known is not None else collect_test_ids(root)\n    problems: list[str] = []",
+        "expect_red": [
+          "tests/test_offline.py::test_the_applicability_check_detects_a_missing_expected_test"
         ]
       }
     ]
@@ -969,17 +980,17 @@
         "find": "┌── Agent 编排（**手写循环**；LangGraph **未接线**）",
         "replace": "┌── Agent 编排（LangGraph）",
         "expect_red": [
-          "tests/test_deliverable.py::test_readme_marks_unbuilt_layers_instead_of_presenting_them_as_built"
+          "tests/test_deliverable.py::test_outward_facing_docs_mark_unbuilt_layers_instead_of_presenting_them_as_built"
         ]
       },
       {
         "id": "readme2-call-the-policy-point-a-separate-process",
-        "desc": "Describe the policy enforcement point as running in a separate process. It is an in-process module that nothing in the agent path even calls yet.",
+        "desc": "Describe the policy enforcement point as a separate process. It is an in-process module reached by in-process calls -- there is no process boundary, and no MCP either. (Retargeted in D15 after the surrounding README table was rewritten; the staleness check is what flagged it.)",
         "file": "README.md",
-        "find": "边界机制是**建好了、还没接上**",
-        "replace": "边界机制跑在**独立进程**里，Agent 只能通过它行动",
+        "find": "| 策略执行点（路径守卫 / 动词分级 / 隔离区 / 审计） | `src/rca/policy/`（27 条用例）+ **ops 工具的接线**",
+        "replace": "| 策略执行点（**独立进程**） | `src/rca/policy/`",
         "expect_red": [
-          "tests/test_deliverable.py::test_readme_marks_unbuilt_layers_instead_of_presenting_them_as_built"
+          "tests/test_deliverable.py::test_outward_facing_docs_mark_unbuilt_layers_instead_of_presenting_them_as_built"
         ]
       }
     ]
@@ -1043,6 +1054,68 @@
         "replace": "    if True:",
         "expect_red": [
           "tests/test_eval.py::test_judge_audit_keyword_side_never_gives_up_on_a_known_scenario"
+        ]
+      }
+    ]
+  },
+  "ops_tools_deny_first": {
+    "harness_log": [
+      "#45"
+    ],
+    "why": "#45: the action face of the thesis existed only as a library. src/rca/policy/ was a complete, tested, 27-case enforcement point that NOTHING in the agent path called -- only tests imported it. So the front-page sentence 'any irreversible operation must pass a deterministic boundary independent of the model's judgement' had no landing place in the code: the diagnosis tool face held three READ-ONLY tools, and the boundary stood across an empty road. D15 built the road (src/rca/tools_ops.py + scripts/ops.py) and, more importantly, kept the diagnosis roles off it: the three specialists still hold one read-only tool each, so on the diagnosis path an irreversible operation is not 'blocked', it is UNREACHABLE. The three mutants below each restore a realistic way to break that: hand the agent a way to mint its own grant, silently downgrade delete to a mere decision (so it 'succeeds' without doing anything), and let the grant store live inside the agent's writable roots (putting the key in the cage).",
+    "tests": [
+      "tests/test_ops_policy.py"
+    ],
+    "mutations": [
+      {
+        "id": "ops1-let-the-agent-mint-its-own-grant",
+        "desc": "Give OpsToolBox a grant() method. Deny-first then exists only in name: the agent opens the door for itself.",
+        "file": "src/rca/tools_ops.py",
+        "find": "    # ------------------------------------------------------------------ 只读辅助",
+        "replace": "    def grant(self, **kw):  # the agent opens the door for itself\n        return self.engine.grant(**kw)\n\n    # ------------------------------------------------------------------ 只读辅助",
+        "expect_red": [
+          "tests/test_ops_policy.py::test_the_ops_toolbox_cannot_create_a_grant"
+        ]
+      },
+      {
+        "id": "ops2-delete-becomes-a-mere-decision",
+        "desc": "Route delete_artifact to authorize() instead of quarantine_delete(): the call reports success-shaped decisions while nothing is ever moved, so 'reversible deletion' silently stops existing.",
+        "file": "src/rca/tools_ops.py",
+        "find": "        d = self.engine.quarantine_delete(\n            tool=\"delete_artifact\", path=path, grant_id=grant_id,\n            actor=self.actor, trace_id=self.trace_id, note=note,\n        )",
+        "replace": "        d = self.engine.authorize(\n            tool=\"delete_artifact\", path=path, grant_id=grant_id,\n            actor=self.actor, trace_id=self.trace_id,\n        )",
+        "expect_red": [
+          "tests/test_ops_policy.py::test_delete_with_a_grant_goes_to_quarantine_and_restores_byte_identical"
+        ]
+      },
+      {
+        "id": "ops3-put-the-key-inside-the-cage",
+        "desc": "Drop the hard check that keeps the grant store outside the agent's writable roots, so a grant file inside them would let the constrained party authorise itself.",
+        "file": "src/rca/policy/engine.py",
+        "find": "                if self.grant_store == root or root in self.grant_store.parents:",
+        "replace": "                if False:",
+        "expect_red": [
+          "tests/test_ops_policy.py::test_the_grant_store_may_not_live_inside_the_agents_reachable_roots"
+        ]
+      }
+    ]
+  },
+  "small_sample_disclosure": {
+    "harness_log": [
+      "#46"
+    ],
+    "why": "#46: I nearly published a MAGNITUDE taken from a single cell with n=3. The headline 'multi scores 9.5 points lower' came entirely from F4, where multi was 1/3 and baseline 3/3 -- and a same-config rerun of the BASELINE on that same scenario produced 2/3. With three rounds a per-scenario accuracy can only take 0/33/67/100, so adjacent rungs are 33 points apart: that resolution cannot support a 9.5-point claim. The fix has two halves: soften the wording everywhere, and make the RUNNER say it out loud (the half a test can hold on to).",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "smallsample1-hide-the-warning",
+        "desc": "Silence the small-sample warning so a three-round per-scenario number looks as quotable as a large-sample one -- exactly the state that let a 9.5-point magnitude get written into the docs.",
+        "file": "eval/runner.py",
+        "find": "    if n_rounds >= SMALL_SAMPLE_MIN_ROUNDS:\n        return None",
+        "replace": "    if True:\n        return None",
+        "expect_red": [
+          "tests/test_eval.py::test_small_sample_warning_fires_for_three_rounds"
         ]
       }
     ]

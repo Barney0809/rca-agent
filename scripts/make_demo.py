@@ -390,11 +390,15 @@ multi <code>{e(m['started_at'])}</code>（法定节假日<strong>全天</strong>
 <h3>口径边界（数字必须连同这些一起读）</h3>
 <ul>
 <li>两侧样本：baseline {e(b_sample)}；multi {e(m_sample)}</li>
-<li>每侧仅 <strong>3 轮</strong>；只测 <code>deepseek-flash</code>，未测 <code>v4-pro</code></li>
+<li>每侧仅 <strong>3 轮</strong>；只测 <code>deepseek-flash</code>（v4-pro 另做过一组对照，
+  见 <code>docs/06</code>）</li>
 <li>评分 = 关键词判定（主）+ LLM 裁判（独立交叉校验，<strong>不参与</strong>正确性计算）</li>
 <li>被诊断系统是<strong>自建</strong>的，不是生产系统 —— 故障是注入的，不是自然发生的</li>
 <li>F4 上 multi 明显更差（1/3），两把尺子逐条核对过 —— 见
   <code>docs/harness-log.md</code> #44</li>
+<li>⚠️ <strong>幅度不稳定</strong>：给出的差距全部来自 F4 一个场景，而单场景每轮只跑 3 次 ——
+  同配置重跑 baseline，它在 F4 上自己就从 3/3 变成 2/3。三次配对实验里<strong>方向一致</strong>，
+  但幅度在 0~67 个百分点之间摆。所以本页给的是<strong>方向</strong>，不是<strong>幅度</strong> —— 见 #46</li>
 </ul>
 
 <h2>五、封堵清单（{len(rows)} 条）</h2>

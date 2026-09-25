@@ -565,6 +565,59 @@ def _seal_mod():
     return seal_report
 
 
+def test_the_applicability_check_detects_a_missing_expected_test():
+    """元测试：`expect_red` 指向一个**不存在的用例**时，检查必须报出来。
+
+    由来（harness-log #47，D15 实测）：我在给一条守卫用例改名之后
+    （`test_readme_marks_unbuilt_...` → `test_outward_facing_docs_mark_unbuilt_...`），
+    两个变异体的 `expect_red` 还指着旧名字 —— 于是它们在**完整对账**里报 `NOT SEALED`
+    （"变异体没能让用例变红"），而真实原因只是**名字过期**。
+
+    ⚠️ 这两者在报告里长得一模一样，但修法完全不同：
+       名字过期 → 改 mutations.json；用例抓不住 → 补或改用例。
+       完整对账要几分钟、平时不会跑；这条检查是秒级的、进普通测试。
+    """
+    import sys
+
+    if str(ROOT / "scripts") not in sys.path:
+        sys.path.insert(0, str(ROOT / "scripts"))
+    from mutate_check import missing_expect_red_targets  # noqa: PLC0415
+
+    spec = {"g": {"harness_log": ["#1"], "mutations": [
+        {"id": "m", "find": "x", "replace": "y",
+         "expect_red": ["tests/test_eval.py::test_this_does_not_exist"]},
+    ]}}
+
+    probs = missing_expect_red_targets(spec, known={"tests/test_eval.py::test_exists"})
+
+    assert probs, "名字过期没有被报出来 —— 那它只会在几分钟的完整对账里暴露"
+    assert "test_this_does_not_exist" in probs[0]
+    assert "过期" in probs[0], "要说清真实原因是名字过期，而不是用例抓不住"
+
+
+def test_the_applicability_check_refuses_to_run_on_an_empty_collection():
+    """防空转：收集不到任何用例时，必须**说清是收集坏了**。
+
+    否则每一个 `expect_red` 都会被报成"不存在"，输出一片假阳性 ——
+    看起来像"到处都是错"，比沉默更糟。
+    """
+    import sys
+
+    if str(ROOT / "scripts") not in sys.path:
+        sys.path.insert(0, str(ROOT / "scripts"))
+    from mutate_check import missing_expect_red_targets  # noqa: PLC0415
+
+    spec = {"g": {"harness_log": ["#1"], "mutations": [
+        {"id": "m", "find": "x", "replace": "y",
+         "expect_red": ["tests/test_eval.py::test_anything"]},
+    ]}}
+
+    probs = missing_expect_red_targets(spec, known=set())
+
+    assert len(probs) == 1, f"应当只报一条「收集坏了」，而不是逐条假阳性：{probs}"
+    assert "收集不到" in probs[0]
+
+
 def test_seal_report_parses_the_declared_statuses():
     """必须能读出表格里的封堵标记，且读到的条目够多。"""
     mod = _seal_mod()
