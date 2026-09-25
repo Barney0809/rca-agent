@@ -843,3 +843,88 @@ def test_template_normalization_groups_variable_parts():
     # 不同事件**不能**被错误合并
     e = template_of("连接池获取超时：等待 400ms 后放弃")
     assert e != a, "不同事件的模板不应相同"
+
+# ================================================================
+# #36 让"变异定义过期"**自动**被发现（不再靠人记得跑对账）
+# ================================================================
+#
+# #25 已经咬人**三次**：源码一改，某个变异体的 find 串就失配，
+# 而它会一直"假装通过"，直到有人去跑完整对账。
+#
+# 完整对账（建 24 次副本 + 跑 53 次 pytest）要十几分钟 ——
+# **太贵 ⇒ 没人会在每次改源码后跑它 ⇒ 纪律注定失效。**
+#
+# 而"过期"根本不需要跑测试就能发现：只看 find 串在不在当前源码里。
+# 那是**毫秒级**的纯文本检查，可以放进普通测试 —— 于是**每次跑测试都检查一遍**。
+#
+# ⇒ 原则：**把贵的检查拆一个便宜的近似版，让便宜的那个天天跑。**
+
+
+def test_every_mutation_definition_still_applies():
+    """每条变异定义的 `find` 串必须**在当前源码里恰好出现一次**。
+
+    一旦它失配（源码被重构），这条用例就会红 ——
+    不需要等十几分钟的完整对账，也不需要谁记得去跑。
+    """
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root / "scripts") not in _sys.path:
+        _sys.path.insert(0, str(root / "scripts"))
+    from mutate_check import verify_spec_applies  # noqa: PLC0415
+
+    problems = verify_spec_applies()
+    assert not problems, (
+        "以下变异定义已**过期**（源码改了，定义没跟着改）——\n"
+        "过期的变异体会一直『假装通过』，所以必须及时重新对准：\n  "
+        + "\n  ".join(problems)
+        + "\n（这正是 harness-log #25 描述的失败模式；修复后请再跑一次完整对账）"
+    )
+
+
+def test_the_applicability_check_actually_detects_staleness(tmp_path):
+    """元测试：喂一条**故意失配**的变异定义给它，它必须发现。
+
+    没有这一条，上面那句 `assert not problems` 可能只是因为**检查坏了**
+    （例如它永远返回空清单）—— 那正是 #21 学到的教训。
+    """
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root / "scripts") not in _sys.path:
+        _sys.path.insert(0, str(root / "scripts"))
+    from mutate_check import verify_spec_applies  # noqa: PLC0415
+
+    (tmp_path / "probe.py").write_text("x = 1\n", encoding="utf-8")
+    bogus = {
+        "bogus_group": {
+            "harness_log": ["#00"],
+            "mutations": [
+                {"id": "not-there", "file": "probe.py", "find": "这串根本不存在"},
+                {"id": "appears-twice", "file": "probe.py", "find": "x = 1"},
+            ],
+        }
+    }
+    # 让 "x = 1" 出现两次
+    (tmp_path / "probe.py").write_text("x = 1\ny = 2\nx = 1\n", encoding="utf-8")
+
+    problems = verify_spec_applies(bogus, root=tmp_path)
+    assert any("not-there" in p_ for p_ in problems), f"找不到的串没被发现：{problems}"
+    assert any("appears-twice" in p_ for p_ in problems), f"出现两次的串没被发现：{problems}"
+
+
+def test_a_group_without_a_harness_log_id_is_flagged(tmp_path):
+    """没标注 `harness_log` 的组也要报 —— 否则对账时它无法归属到任何条目。"""
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root / "scripts") not in _sys.path:
+        _sys.path.insert(0, str(root / "scripts"))
+    from mutate_check import verify_spec_applies  # noqa: PLC0415
+
+    (tmp_path / "probe.py").write_text("x = 1\n", encoding="utf-8")
+    problems = verify_spec_applies(
+        {"no_id": {"mutations": [{"id": "m", "file": "probe.py", "find": "x = 1"}]}},
+        root=tmp_path,
+    )
+    assert any("harness_log" in p_ for p_ in problems), problems

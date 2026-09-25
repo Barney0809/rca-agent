@@ -242,6 +242,52 @@ def verify_mutant_src_is_loaded(copy_dir: Path) -> str:
     return loaded_path
 
 
+
+# ================================================================
+# 秒级检查：变异定义**是否还适用于当前源码**
+# ================================================================
+#
+# 为什么需要它（#25 已经三次咬人：变异体被重构弄过期，却一直"假装通过"）：
+#
+#   完整对账（`seal_report.py`）要建 24 次副本、跑 53 次 pytest —— **几分钟到十几分钟**。
+#   太贵 ⇒ 没人会在每次改源码之后跑它 ⇒ 那条"改完就要对账"的纪律**注定失效**。
+#
+#   而"过期"这件事**根本不需要跑测试就能发现**：
+#   只要看看每条变异的 `find` 串**在不在当前源码里、且只出现一次**。
+#   那是**毫秒级**的纯文本检查，可以放进普通测试里 ——
+#   于是**每一次跑测试都自动检查一遍**，而不是靠人记得。
+#
+# ⇒ 原则：**把贵的检查拆出一个便宜的近似版，让便宜的那个天天跑。**
+
+
+def verify_spec_applies(spec: dict | None = None, root: Path | None = None) -> list[str]:
+    """逐条检查变异定义是否还适用。返回问题清单（空 = 全部适用）。
+
+    ⚠️ 只做**静态检查**，不建副本、不跑测试、不花时间。
+       它能抓住的是"find 串找不到 / 找到多处"这一类过期；
+       **抓不到**"变异还能套用、但用例已经抓不住它"（那仍需完整对账）。
+    """
+    spec = spec if spec is not None else load_spec()
+    root = root or ROOT
+    problems: list[str] = []
+
+    for group, g in spec.items():
+        if not g.get("harness_log"):
+            problems.append(f"{group}: 没有标注 harness_log（对账时无法归属到条目）")
+        for mut in g.get("mutations", []):
+            target = root / mut["file"]
+            if not target.exists():
+                problems.append(f"{group}/{mut['id']}: 文件不存在 {mut['file']}")
+                continue
+            text = target.read_text(encoding="utf-8")
+            n = text.count(mut["find"])
+            if n != 1:
+                problems.append(
+                    f"{group}/{mut['id']}: 在 {mut['file']} 里找到 {n} 处匹配（期望 1）"
+                    f" —— 变异定义已过期，需重新对准"
+                )
+    return problems
+
 def apply_mutation(copy_dir: Path, mut: dict) -> None:
     target = copy_dir / mut["file"]
     text = target.read_text(encoding="utf-8")
@@ -336,9 +382,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Mutation check: prove regression tests can go red")
     parser.add_argument("--group", help="mutation group name (see scripts/mutations.json)")
     parser.add_argument("--list", action="store_true", help="list every mutation group")
+    parser.add_argument("--verify-only", action="store_true",
+                        help="fast: only check that every mutation definition still applies")
     args = parser.parse_args()
 
     spec = load_spec()
+
+    if args.verify_only:
+        problems = verify_spec_applies(spec)
+        if problems:
+            print(f"{len(problems)} mutation definition(s) no longer apply:")
+            for p_ in problems:
+                print(f"  - {p_}")
+            return 1
+        n = sum(len(g['mutations']) for g in spec.values())
+        print(f"OK: all {n} mutations across {len(spec)} groups still apply.")
+        return 0
 
     if args.list or not args.group:
         print("mutation groups in scripts/mutations.json:")

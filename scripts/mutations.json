@@ -816,5 +816,26 @@
         ]
       }
     ]
+  },
+  "mutation_definitions_stay_valid": {
+    "harness_log": [
+      "#36"
+    ],
+    "why": "#36: three times a source refactor silently invalidated a mutation definition, which then kept 'passing' until someone ran the full 15-minute seal report -- and nobody runs a 15-minute check after every edit. Applicability needs no test run at all: just check that each `find` string occurs exactly once in the current source. That is a millisecond-level check, so it now runs on every normal test run.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "verify-a-checker-passes-everything",
+        "desc": "Make the applicability check return no problems. Staleness would then go unnoticed again -- and the meta-test exists precisely to catch this.",
+        "file": "scripts/mutate_check.py",
+        "find": "    for group, g in spec.items():\n        if not g.get(\"harness_log\"):",
+        "replace": "    for group, g in []:\n        if not g.get(\"harness_log\"):",
+        "expect_red": [
+          "tests/test_offline.py::test_the_applicability_check_actually_detects_staleness"
+        ]
+      }
+    ]
   }
 }
