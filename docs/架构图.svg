@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="600" viewBox="0 0 980 600"
+     font-family="Microsoft YaHei, Segoe UI, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#374151"/>
+    </marker>
+    <style>
+      .box   { fill:#f8fafc; stroke:#334155; stroke-width:1.6; rx:8; }
+      .impl  { fill:#ecfdf5; stroke:#0f766e; stroke-width:1.8; }
+      .todo  { fill:#fff7ed; stroke:#b91c1c; stroke-width:1.8; stroke-dasharray:7 5; }
+      .t     { fill:#111827; font-size:15px; }
+      .ts    { fill:#4b5563; font-size:13px; }
+      .tb    { fill:#111827; font-size:16px; font-weight:600; }
+      .flow  { stroke:#374151; stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+      .flowt { fill:#374151; font-size:12.5px; }
+      .note  { fill:#b91c1c; font-size:12.5px; }
+      .h1    { fill:#0f172a; font-size:22px; font-weight:700; }
+    </style>
+  </defs>
+
+  <rect width="980" height="600" fill="#ffffff"/>
+  <text class="h1" x="32" y="42">rca-agent 架构：已实现的内容，与刻意未接线的部分</text>
+  <text class="ts" x="32" y="66">实线绿框 = 已实现且有用例；红色虚线 = 设计里有、实现里没有（未接线）</text>
+
+  <!-- 1. Agent 编排 -->
+  <rect class="impl" x="32" y="92" width="600" height="112"/>
+  <text class="tb" x="52" y="118">Agent 编排（手写显式循环）</text>
+  <text class="ts" x="52" y="142">baseline.py　单 Agent（一次拿全部遥测）</text>
+  <text class="ts" x="52" y="164">specialist.py × 3　日志 / 指标 / 变更 —— 各自只看自己那一路</text>
+  <text class="ts" x="52" y="186">coordinator.py　交叉质证（举证责任机械校验）+ 裁决</text>
+
+  <!-- LangGraph 未接线 -->
+  <rect class="todo" x="660" y="92" width="288" height="112"/>
+  <text class="tb" x="680" y="118">LangGraph 编排框架（未接线）</text>
+  <text class="ts" x="680" y="142">依赖里有，代码里零命中</text>
+  <text class="ts" x="680" y="164">代价：没有 checkpointer</text>
+  <text class="ts" x="680" y="186">⇒ 断点续跑（AC-10）未实现　见 ADR-0001</text>
+
+  <!-- 2. 工具面 -->
+  <rect class="impl" x="32" y="240" width="600" height="104"/>
+  <text class="tb" x="52" y="266">工具面：3 个只读工具</text>
+  <text class="ts" x="52" y="290">query_logs　query_metrics　get_changes</text>
+  <text class="ts" x="52" y="312">角色隔离：RestrictedToolBox（专员拿不到别人那一路）</text>
+  <text class="ts" x="52" y="334">目前没有"不可逆操作" —— 所以还没有东西需要被拦</text>
+
+  <!-- MCP 未接线 -->
+  <rect class="todo" x="660" y="240" width="288" height="104"/>
+  <text class="tb" x="680" y="266">MCP 工具面收口（未接线）</text>
+  <text class="ts" x="680" y="290">代码里零行 MCP</text>
+  <text class="ts" x="680" y="312">工具是进程内直调，没有经过收口</text>
+  <text class="ts" x="680" y="334">⇒「无旁路保证」尚未成立（FR-2.1）</text>
+
+  <!-- 3. 策略执行点 -->
+  <rect class="impl" x="32" y="372" width="600" height="96"/>
+  <text class="tb" x="52" y="398">策略执行点 src/rca/policy/（已实现，27 条用例）</text>
+  <text class="ts" x="52" y="422">路径规范化 · 动词分级 · 隔离区（软删除 + TTL + 可还原） · 审计日志</text>
+  <text class="ts" x="52" y="444">核心主张：不承诺"守住不可逆"，而是让不可逆变成可逆　见 ADR-0006</text>
+
+  <rect class="todo" x="660" y="372" width="288" height="96"/>
+  <text class="tb" x="680" y="398">接到 Agent 路径（未接线）</text>
+  <text class="ts" x="680" y="422">它现在只被 tests/test_policy.py import</text>
+  <text class="ts" x="680" y="444">⇒ 边界机制是"建好了、还没接上"</text>
+
+  <!-- 4. 遥测 -->
+  <rect class="impl" x="32" y="496" width="600" height="76"/>
+  <text class="tb" x="52" y="522">遥测：接入 → 降维（原始遥测永不进上下文）</text>
+  <text class="ts" x="52" y="546">文本日志 + Prometheus 指标；压缩到 0.217%，信号全存活</text>
+
+  <!-- 数据流箭头 -->
+  <line class="flow" x1="332" y1="204" x2="332" y2="240"/>
+  <text class="flowt" x="342" y="228">工具调用（进程内）</text>
+
+  <line class="flow" x1="332" y1="344" x2="332" y2="372"/>
+  <text class="flowt" x="342" y="364">动作先过策略执行点（设计意图）</text>
+
+  <line class="flow" x1="332" y1="468" x2="332" y2="496"/>
+  <text class="flowt" x="342" y="488">只读遥测</text>
+
+  <text class="ts" x="32" y="592">被诊断世界：order → inventory → payment → 外部风控（三个 FastAPI 服务 + Redis，8 种可注入故障，一条命令起全栈）　见 docs/04-故障目录.md</text>
+</svg>

@@ -236,6 +236,30 @@ def build() -> str:
     print(f"  计价时段：baseline {b['tier']}（{b['tier_src']}）"
           f"；multi {m['tier']}（{m['tier_src']}）")
 
+    # ★ 结论的**措辞也由数字推出**（#37 的推广）：不能再手打"准确率没有任何优势" ——
+    #   一旦 multi 补齐到全部场景、准确率变了，手打的句子就会当场变成假话。
+    acc_delta_pp = (m["acc"] - b["acc"]) * 100
+    if abs(acc_delta_pp) < 0.05:
+        headline = "多 Agent 没有可测的价值增量。"
+        verdict_word = "准确率<strong>没有变化</strong>"
+    elif acc_delta_pp < 0:
+        headline = "多 Agent 不仅没有价值增量，而且<strong>更差</strong>。"
+        verdict_word = f"准确率反而<strong>低了 {abs(acc_delta_pp):.1f} 个百分点</strong>"
+    else:
+        headline = "多 Agent <strong>更准</strong>，但要为此付出高得多的成本。"
+        verdict_word = f"准确率<strong>高了 {acc_delta_pp:.1f} 个百分点</strong>"
+    print(f"  结论措辞：{headline}／{verdict_word}")
+
+    # 两侧样本是否对等（决定"能不能直接比准确率"）
+    same_sample = b["scen"] == m["scen"] and b["rounds"] == m["rounds"]
+    if same_sample:
+        sample_note = ("两侧覆盖**同一批**场景与轮数 ⇒ 这是**可对等比较**。")
+    else:
+        sample_note = (f"⚠️ multi 只跑了 {m_faults} 这 {m['scen']} 个场景，"
+                       f"其余 {untested} 个<strong>未测</strong> —— "
+                       f"「准确率」的差别只能在这 {m['scen']} 个场景上说。")
+    print(f"  样本对等：{same_sample}")
+
     # 挑一次"多故障"的诊断来展示完整轨迹（F8：分工的价值与失效都在这里）
     demo_fault = "F8" if "F8" in m["faults"] else m["faults"][0]
     demo_round = 1
@@ -301,23 +325,23 @@ def build() -> str:
 
 <h2>一、一句话结论</h2>
 <blockquote>
- <strong>多 Agent 没有可测的价值增量。</strong>
+ <strong>{headline}</strong>
  在同一个世界里，单 Agent 用 <span class="num">¥{b['cost']:.4f}</span>/次拿到
- <span class="num">{b['acc']:.0%}</span> 准确率；
+ <span class="num">{b['acc'] * 100:.1f}%</span> 准确率；
  三专员 + 交叉质证 + 裁决用 <span class="num">¥{m['cost']:.4f}</span>/次
  （<strong>{m['cost']/b['cost']:.1f}×</strong>）拿到
- <span class="num">{m['acc']:.0%}</span> —— <strong>准确率没有任何优势</strong>。
+ <span class="num">{m['acc'] * 100:.1f}%</span> —— {verdict_word}。
 </blockquote>
 <p class="dim">比这个负结果本身更重要的，是它<strong>是被测量出来的</strong>：
-一路上有六七次得到过相反的结论，每一次都是「尺子」坏了（见第四节）。</p>
+一路上有七八次得到过相反的结论，每一次都是「尺子」坏了（见第四节）。</p>
 
 <h2>二、定稿数字（同配置 · 同时段 · 同一评分路径）</h2>
 <table>
 <tr><th>指标</th><th>baseline（单 Agent）</th><th>multi（三专员+质证+裁决）</th><th>倍数</th></tr>
 <tr><td>样本</td><td class="num">{e(b_sample)}</td>
     <td class="num">{e(m_sample)}</td><td>—</td></tr>
-<tr><td>准确率</td><td class="num"><strong>{b['acc']:.0%}</strong></td>
-    <td class="num"><strong>{m['acc']:.0%}</strong></td><td>—</td></tr>
+<tr><td>准确率</td><td class="num"><strong>{b['acc'] * 100:.1f}%</strong></td>
+    <td class="num"><strong>{m['acc'] * 100:.1f}%</strong></td><td>—</td></tr>
 <tr><td>步数（LLM 轮次）</td><td class="num">{b['steps']:.1f}</td>
     <td class="num">{m['steps']:.1f}</td><td class="num">{m['steps']/b['steps']:.1f}×</td></tr>
 <tr><td><strong>成本 / 次诊断</strong></td><td class="num"><strong>¥{b['cost']:.4f}</strong></td>
@@ -332,7 +356,7 @@ multi <code>{e(m['tier'])}</code>（{e(m['tier_src'])}）
 起跑时刻：baseline <code>{e(b['started_at'])}</code> ·
 multi <code>{e(m['started_at'])}</code>（法定节假日<strong>全天</strong>按谷时计费）。
 有效场景 {b['scen']} 个 —— <strong>F2 已作废</strong>（它的标准答案是反的，见第四节）。
-⚠️ multi 只跑了 {e(m_faults)} 这 {m['scen']} 个场景，其余 {untested} 个<strong>未测</strong>。</p>
+⚠️ {sample_note}</p>
 
 <h2>三、一次真实诊断的完整轨迹</h2>
 <p class="dim">场景 <code>{e(demo_fault)}</code>{('（' + e(demo_note) + '）') if demo_note else ''}，
@@ -360,14 +384,17 @@ multi <code>{e(m['started_at'])}</code>（法定节假日<strong>全天</strong>
 <tr><td>成本涨了 2.1 倍</td><td>我的计价模型漏了法定节假日，虚高一倍</td><td>计价模型错</td></tr>
 <tr><td>给输出加上限能省 23% 成本</td><td>截断 JSON → 那几次结论作废，收敛率归零</td><td>省了钱，赔了有效性</td></tr>
 <tr><td>输出量涨了 77%</td><td>录制文件是追加的，我按整文件统计</td><td>测量工具错</td></tr>
+<tr><td>multi 在 F4 上失败，一定是评分口径冤枉了它</td><td>读代码 + 对存档实测 + 两把尺子逐条核对：<strong>不是</strong>尺子问题，multi 真的更差</td><td>我的怀疑错，结论对</td></tr>
 </table>
 
 <h3>口径边界（数字必须连同这些一起读）</h3>
 <ul>
-<li>multi 只测了 <strong>F1/F8</strong> 两个场景；其余五个未测</li>
+<li>两侧样本：baseline {e(b_sample)}；multi {e(m_sample)}</li>
 <li>每侧仅 <strong>3 轮</strong>；只测 <code>deepseek-flash</code>，未测 <code>v4-pro</code></li>
 <li>评分 = 关键词判定（主）+ LLM 裁判（独立交叉校验，<strong>不参与</strong>正确性计算）</li>
 <li>被诊断系统是<strong>自建</strong>的，不是生产系统 —— 故障是注入的，不是自然发生的</li>
+<li>F4 上 multi 明显更差（1/3），两把尺子逐条核对过 —— 见
+  <code>docs/harness-log.md</code> #44</li>
 </ul>
 
 <h2>五、封堵清单（{len(rows)} 条）</h2>

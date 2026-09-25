@@ -1,0 +1,625 @@
+[
+  {
+    "phase": "investigate",
+    "role": "logs",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"ERROR\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] ERROR ×2153 05:45:32→05:45:46  扣款失败 order_id=ORD-<ID>: RuntimeError: risk control unavailable\n    例：2026-09-24 05:45:32.966 ERROR [payment] trace=328505dfead | 扣款失败 order_id=ORD-80E1DA429F: RuntimeError: risk control unavailable\n[inventory] ERROR ×127 05:45:33→05:45:46  调用下游 payment 重试 <N> 次全部失败：payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 调用下游 payment 重试 5 次全部失败：payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[inventory] ERROR ×127 05:45:33→05:45:46  库存预留失败（下游不可用）order_id=ORD-<ID>: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 库存预留失败（下游不可用）order_id=ORD-A3C57C1799: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] ERROR ×127 05:45:33→05:45:46  调用下游 inventory 重试 <N> 次全部失败：inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 调用下游 inventory 重试 1 次全部失败：inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n[order] ERROR ×127 05:45:33→05:45:46  下单失败（下游不可用）order_id=ORD-<ID>: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 下单失败（下游不可用）order_id=ORD-A3C57C1799: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}",
+        "ok": true
+      },
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"WARNING\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] WARNING ×2153 05:45:32→05:45:46  外部风控调用失败（模拟）耗时=<N>ms\n    例：2026-09-24 05:45:32.966 WARNING [payment] trace=328505dfead | 外部风控调用失败（模拟）耗时=31ms\n[inventory] WARNING ×2153 05:45:32→05:45:46  调用下游 payment 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:32.967 WARNING [inventory] trace=328505dfead | 调用下游 payment 第 1/5 次失败（耗时 64ms）：DownstreamFailed: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] WARNING ×127 05:45:33→05:45:46  调用下游 inventory 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.557 WARNING [order] trace=32857b37f49 | 调用下游 inventory 第 1/1 次失败（耗时 690ms）：DownstreamFailed: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"风控\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] WARNING ×2153 05:45:32→05:45:46  外部风控调用失败（模拟）耗时=<N>ms\n    例：2026-09-24 05:45:32.966 WARNING [payment] trace=328505dfead | 外部风控调用失败（模拟）耗时=31ms\n[payment] INFO ×1402 05:45:32→05:45:46  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-24 05:45:32.975 INFO  [payment] trace=3285124b970 | 扣款成功 order_id=ORD-16C63FBC65 金额=1999分 风控耗时=30.8ms 总耗时=49ms",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"level\": \"INFO\", \"service\": \"payment\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] INFO ×1402 05:45:32→05:45:46  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-24 05:45:32.975 INFO  [payment] trace=3285124b970 | 扣款成功 order_id=ORD-16C63FBC65 金额=1999分 风控耗时=30.8ms 总耗时=49ms",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"level\": \"INFO\", \"service\": \"order\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[order] INFO ×1529 05:45:32→05:45:46  收到下单请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-24 05:45:32.849 INFO  [order] trace=32849795be8 | 收到下单请求 order_id=ORD-E0285110A7 sku=SKU-002 qty=2\n[order] INFO ×1402 05:45:32→05:45:46  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> OK\"\n    例：2026-09-24 05:45:32.976 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 200 OK\"\n[order] INFO ×1402 05:45:33→05:45:46  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-24 05:45:33.006 INFO  [order] trace=328491ea632 | 下单成功 order_id=ORD-55165B8AF2 耗时=157ms\n[order] INFO ×127 05:45:33→05:45:46  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> Bad Gateway\"\n    例：2026-09-24 05:45:33.557 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 502 Bad Gateway\"",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"超时\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"timeout\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"level\": \"INFO\", \"service\": \"inventory\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[inventory] INFO ×2153 05:45:32→05:45:46  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> Bad Gateway\"\n    例：2026-09-24 05:45:32.966 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 502 Bad Gateway\"\n[inventory] INFO ×1529 05:45:32→05:45:46  收到库存预留请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-24 05:45:32.886 INFO  [inventory] trace=32850ade705 | 收到库存预留请求 order_id=ORD-73395AF9F7 sku=SKU-001 qty=3\n[inventory] INFO ×1402 05:45:32→05:45:46  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> OK\"\n    例：2026-09-24 05:45:32.975 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 200 OK\"\n[inventory] INFO ×1402 05:45:32→05:45:46  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-24 05:45:32.976 INFO  [inventory] trace=3285124b970 | 库存预留成功 order_id=ORD-16C63FBC65 sku=SKU-002 剩余=998783 耗时=86ms",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"risk control\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] ERROR ×2153 05:45:32→05:45:46  扣款失败 order_id=ORD-<ID>: RuntimeError: risk control unavailable\n    例：2026-09-24 05:45:32.966 ERROR [payment] trace=328505dfead | 扣款失败 order_id=ORD-80E1DA429F: RuntimeError: risk control unavailable\n[inventory] ERROR ×127 05:45:33→05:45:46  调用下游 payment 重试 <N> 次全部失败：payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 调用下游 payment 重试 5 次全部失败：payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[inventory] ERROR ×127 05:45:33→05:45:46  库存预留失败（下游不可用）order_id=ORD-<ID>: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 库存预留失败（下游不可用）order_id=ORD-A3C57C1799: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] ERROR ×127 05:45:33→05:45:46  调用下游 inventory 重试 <N> 次全部失败：inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 调用下游 inventory 重试 1 次全部失败：inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n[order] ERROR ×127 05:45:33→05:45:46  下单失败（下游不可用）order_id=ORD-<ID>: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 下单失败（下游不可用）order_id=ORD-A3C57C1799: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n[inventory] WARNING ×2153 05:45:32→05:45:46  调用下游 payment 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:32.967 WARNING [inventory] trace=328505dfead | 调用下游 payment 第 1/5 次失败（耗时 64ms）：DownstreamFailed: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] WARNING ×127 05:45:33→05:45:46  调用下游 inventory 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.557 WARNING [order] trace=32857b37f49 | 调用下游 inventory 第 1/1 次失败（耗时 690ms）：DownstreamFailed: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"重试\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[inventory] ERROR ×127 05:45:33→05:45:46  调用下游 payment 重试 <N> 次全部失败：payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 调用下游 payment 重试 5 次全部失败：payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] ERROR ×127 05:45:33→05:45:46  调用下游 inventory 重试 <N> 次全部失败：inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 调用下游 inventory 重试 1 次全部失败：inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"模拟\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] WARNING ×2153 05:45:32→05:45:46  外部风控调用失败（模拟）耗时=<N>ms\n    例：2026-09-24 05:45:32.966 WARNING [payment] trace=328505dfead | 外部风控调用失败（模拟）耗时=31ms",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"unavailable\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] ERROR ×2153 05:45:32→05:45:46  扣款失败 order_id=ORD-<ID>: RuntimeError: risk control unavailable\n    例：2026-09-24 05:45:32.966 ERROR [payment] trace=328505dfead | 扣款失败 order_id=ORD-80E1DA429F: RuntimeError: risk control unavailable\n[inventory] ERROR ×127 05:45:33→05:45:46  调用下游 payment 重试 <N> 次全部失败：payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 调用下游 payment 重试 5 次全部失败：payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[inventory] ERROR ×127 05:45:33→05:45:46  库存预留失败（下游不可用）order_id=ORD-<ID>: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 库存预留失败（下游不可用）order_id=ORD-A3C57C1799: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] ERROR ×127 05:45:33→05:45:46  调用下游 inventory 重试 <N> 次全部失败：inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 调用下游 inventory 重试 1 次全部失败：inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n[order] ERROR ×127 05:45:33→05:45:46  下单失败（下游不可用）order_id=ORD-<ID>: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 下单失败（下游不可用）order_id=ORD-A3C57C1799: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n[inventory] WARNING ×2153 05:45:32→05:45:46  调用下游 payment 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:32.967 WARNING [inventory] trace=328505dfead | 调用下游 payment 第 1/5 次失败（耗时 64ms）：DownstreamFailed: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] WARNING ×127 05:45:33→05:45:46  调用下游 inventory 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.557 WARNING [order] trace=32857b37f49 | 调用下游 inventory 第 1/1 次失败（耗时 690ms）：DownstreamFailed: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "phase": "investigate",
+    "role": "metrics",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"error\",target=\"inventory\"} = 127\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 1402\n  downstream_exhausted_total{target=\"inventory\"} = 127\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"create_order\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"create_order\",result=\"pool_exhausted\"} = 0\n  requests_total{endpoint=\"create_order\"} = 1529",
+        "ok": true
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 2153\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 1402\n  downstream_exhausted_total{target=\"payment\"} = 127\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"reserve\"} = 1529\n  stock_level{sku=\"SKU-001\"} = 998092\n  stock_level{sku=\"SKU-002\"} = 997912\n  stock_level{sku=\"SKU-003\"} = 997953",
+        "ok": true
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 2153\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"charge\"} = 3555\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 2153\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 1402",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"duration\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"duration\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"duration\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"create_order\",result=\"pool_exhausted\"} = 0",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  pool_in_flight = 0\n  pool_limit = 64",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"stock\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  stock_level{sku=\"SKU-001\"} = 998092\n  stock_level{sku=\"SKU-002\"} = 997912\n  stock_level{sku=\"SKU-003\"} = 997953",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"risk\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 2153\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 1402",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"memory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"memory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"memory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"conn\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"conn\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"conn\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"downstream\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"error\",target=\"inventory\"} = 127\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 1402\n  downstream_exhausted_total{target=\"inventory\"} = 127\n  requests_total{endpoint=\"create_order\",result=\"downstream_failed\"} = 127",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"external\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 2153",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"requests_total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  requests_total{endpoint=\"create_order\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"create_order\",result=\"pool_exhausted\"} = 0\n  requests_total{endpoint=\"create_order\"} = 1529",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"requests_total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"reserve\"} = 1529",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"requests_total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 2153\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"charge\"} = 3555\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 2153\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 1402",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "phase": "investigate",
+    "role": "change",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{}",
+        "result": "# 变更事件\n  2026-09-24T05:45:32+08:00  inventory.W_INVENTORY_DOWNSTREAM_RETRIES: 1 → 5  by=injector",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"inventory\"}",
+        "result": "# 变更事件\n  2026-09-24T05:45:32+08:00  inventory.W_INVENTORY_DOWNSTREAM_RETRIES: 1 → 5  by=injector",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"payment\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"order\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"risk\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"retries\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"timeout\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"W_INVENTORY\"}",
+        "result": "# 变更事件\n  2026-09-24T05:45:32+08:00  inventory.W_INVENTORY_DOWNSTREAM_RETRIES: 1 → 5  by=injector",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"downstream\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"*\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"config\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"limit\"}",
+        "result": "# 变更事件",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"pool\"}",
+        "result": "# 变更事件",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "phase": "cross_exam",
+    "role": "logs",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"WARNING\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] WARNING ×2153 05:45:32→05:45:46  外部风控调用失败（模拟）耗时=<N>ms\n    例：2026-09-24 05:45:32.966 WARNING [payment] trace=328505dfead | 外部风控调用失败（模拟）耗时=31ms\n[inventory] WARNING ×2153 05:45:32→05:45:46  调用下游 payment 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:32.967 WARNING [inventory] trace=328505dfead | 调用下游 payment 第 1/5 次失败（耗时 64ms）：DownstreamFailed: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] WARNING ×127 05:45:33→05:45:46  调用下游 inventory 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.557 WARNING [order] trace=32857b37f49 | 调用下游 inventory 第 1/1 次失败（耗时 690ms）：DownstreamFailed: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}"
+      },
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"ERROR\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] ERROR ×2153 05:45:32→05:45:46  扣款失败 order_id=ORD-<ID>: RuntimeError: risk control unavailable\n    例：2026-09-24 05:45:32.966 ERROR [payment] trace=328505dfead | 扣款失败 order_id=ORD-80E1DA429F: RuntimeError: risk control unavailable\n[inventory] ERROR ×127 05:45:33→05:45:46  调用下游 payment 重试 <N> 次全部失败：payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 调用下游 payment 重试 5 次全部失败：payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[inventory] ERROR ×127 05:45:33→05:45:46  库存预留失败（下游不可用）order_id=ORD-<ID>: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 库存预留失败（下游不可用）order_id=ORD-A3C57C1799: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] ERROR ×127 05:45:33→05:45:46  调用下游 inventory 重试 <N> 次全部失败：inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 调用下游 inventory 重试 1 次全部失败：inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n[order] ERROR ×127 05:45:33→05:45:46  下单失败（下游不可用）order_id=ORD-<ID>: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 下单失败（下游不可用）order_id=ORD-A3C57C1799: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}"
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"重试\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[inventory] ERROR ×127 05:45:33→05:45:46  调用下游 payment 重试 <N> 次全部失败：payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:33.556 ERROR [inventory] trace=32857b37f49 | 调用下游 payment 重试 5 次全部失败：payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] ERROR ×127 05:45:33→05:45:46  调用下游 inventory 重试 <N> 次全部失败：inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.558 ERROR [order] trace=32857b37f49 | 调用下游 inventory 重试 1 次全部失败：inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}"
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"成功\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] INFO ×1402 05:45:32→05:45:46  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-24 05:45:32.975 INFO  [payment] trace=3285124b970 | 扣款成功 order_id=ORD-16C63FBC65 金额=1999分 风控耗时=30.8ms 总耗时=49ms\n[inventory] INFO ×1402 05:45:32→05:45:46  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-24 05:45:32.976 INFO  [inventory] trace=3285124b970 | 库存预留成功 order_id=ORD-16C63FBC65 sku=SKU-002 剩余=998783 耗时=86ms\n[order] INFO ×1402 05:45:33→05:45:46  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-24 05:45:33.006 INFO  [order] trace=328491ea632 | 下单成功 order_id=ORD-55165B8AF2 耗时=157ms"
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"level\": \"INFO\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[inventory] INFO ×2153 05:45:32→05:45:46  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> Bad Gateway\"\n    例：2026-09-24 05:45:32.966 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 502 Bad Gateway\"\n[order] INFO ×1529 05:45:32→05:45:46  收到下单请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-24 05:45:32.849 INFO  [order] trace=32849795be8 | 收到下单请求 order_id=ORD-E0285110A7 sku=SKU-002 qty=2\n[inventory] INFO ×1529 05:45:32→05:45:46  收到库存预留请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-24 05:45:32.886 INFO  [inventory] trace=32850ade705 | 收到库存预留请求 order_id=ORD-73395AF9F7 sku=SKU-001 qty=3\n[inventory] INFO ×1402 05:45:32→05:45:46  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> OK\"\n    例：2026-09-24 05:45:32.975 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 200 OK\"\n[payment] INFO ×1402 05:45:32→05:45:46  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-24 05:45:32.975 INFO  [payment] trace=3285124b970 | 扣款成功 order_id=ORD-16C63FBC65 金额=1999分 风控耗时=30.8ms 总耗时=49ms\n[inventory] INFO ×1402 05:45:32→05:45:46  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-24 05:45:32.976 INFO  [inventory] trace=3285124b970 | 库存预留成功 order_id=ORD-16C63FBC65 sku=SKU-002 剩余=998783 耗时=86ms\n[order] INFO ×1402 05:45:32→05:45:46  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> OK\"\n    例：2026-09-24 05:45:32.976 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 200 OK\"\n[order] INFO ×1402 05:45:33→05:45:46  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-24 05:45:33.006 INFO  [order] trace=328491ea632 | 下单成功 order_id=ORD-55165B8AF2 耗时=157ms\n[order] INFO ×127 05:45:33→05:45:46  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> Bad Gateway\"\n    例：2026-09-24 05:45:33.557 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 502 Bad Gateway\""
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"第 1/5\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"第 5/5\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"timeout\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"风控\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[payment] WARNING ×2153 05:45:32→05:45:46  外部风控调用失败（模拟）耗时=<N>ms\n    例：2026-09-24 05:45:32.966 WARNING [payment] trace=328505dfead | 外部风控调用失败（模拟）耗时=31ms\n[payment] INFO ×1402 05:45:32→05:45:46  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-24 05:45:32.975 INFO  [payment] trace=3285124b970 | 扣款成功 order_id=ORD-16C63FBC65 金额=1999分 风控耗时=30.8ms 总耗时=49ms"
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"次失败\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[inventory] WARNING ×2153 05:45:32→05:45:46  调用下游 payment 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:32.967 WARNING [inventory] trace=328505dfead | 调用下游 payment 第 1/5 次失败（耗时 64ms）：DownstreamFailed: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}\n[order] WARNING ×127 05:45:33→05:45:46  调用下游 inventory 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: inventory 返回 <N>: {\"detail\":\"下游服务异常：payment 返回 <N>: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}\n    例：2026-09-24 05:45:33.557 WARNING [order] trace=32857b37f49 | 调用下游 inventory 第 1/1 次失败（耗时 690ms）：DownstreamFailed: inventory 返回 502: {\"detail\":\"下游服务异常：payment 返回 502: {\\\"detail\\\":\\\"扣款失败：risk control unavailable\\\"}\"}"
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"service\": \"inventory\", \"level\": \"WARNING\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 05:45:32–05:45:46\n按服务：inventory=8893  order=4841  payment=5708\n按级别：ERROR=2661  INFO=12348  WARNING=4433\n\n## 异常时间线\n  05:45  E2661 W4433\n\n## 消息模板\n[inventory] WARNING ×2153 05:45:32→05:45:46  调用下游 payment 第 <N>/<N> 次失败（耗时 <N>ms）：DownstreamFailed: payment 返回 <N>: {\"detail\":\"扣款失败：risk control unavailable\"}\n    例：2026-09-24 05:45:32.967 WARNING [inventory] trace=328505dfead | 调用下游 payment 第 1/5 次失败（耗时 64ms）：DownstreamFailed: payment 返回 502: {\"detail\":\"扣款失败：risk control unavailable\"}"
+      }
+    ]
+  },
+  {
+    "phase": "cross_exam",
+    "role": "metrics",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 2153\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"charge\"} = 3555\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 2153\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 1402"
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 2153\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 1402\n  downstream_exhausted_total{target=\"payment\"} = 127\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"reserve\"} = 1529\n  stock_level{sku=\"SKU-001\"} = 998092\n  stock_level{sku=\"SKU-002\"} = 997912\n  stock_level{sku=\"SKU-003\"} = 997953"
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"error\",target=\"inventory\"} = 127\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 1402\n  downstream_exhausted_total{target=\"inventory\"} = 127\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"create_order\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"create_order\",result=\"pool_exhausted\"} = 0\n  requests_total{endpoint=\"create_order\"} = 1529"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"retry\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"downstream\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 2153\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 1402\n  downstream_exhausted_total{target=\"payment\"} = 127\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 127"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"risk\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 2153\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 1402"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"create_order\",result=\"pool_exhausted\"} = 0"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"stock\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  stock_level{sku=\"SKU-001\"} = 998092\n  stock_level{sku=\"SKU-002\"} = 997912\n  stock_level{sku=\"SKU-003\"} = 997953"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  pool_in_flight = 0\n  pool_limit = 64"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"exhausted\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_exhausted_total{target=\"payment\"} = 127"
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"exhausted\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_exhausted_total{target=\"inventory\"} = 127\n  requests_total{endpoint=\"create_order\",result=\"pool_exhausted\"} = 0"
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"exhausted\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"downstream\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"error\",target=\"inventory\"} = 127\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 1402\n  downstream_exhausted_total{target=\"inventory\"} = 127\n  requests_total{endpoint=\"create_order\",result=\"downstream_failed\"} = 127"
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"requests_total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 127\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"reserve\"} = 1529"
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"requests_total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 2153\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 1402\n  requests_total{endpoint=\"charge\"} = 3555\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 2153\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 1402"
+      }
+    ]
+  },
+  {
+    "phase": "cross_exam",
+    "role": "change",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{}",
+        "result": "# 变更事件\n  2026-09-24T05:45:32+08:00  inventory.W_INVENTORY_DOWNSTREAM_RETRIES: 1 → 5  by=injector"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"retries\"}",
+        "result": "# 变更事件"
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"payment\"}",
+        "result": "# 变更事件"
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"order\"}",
+        "result": "# 变更事件"
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"risk\"}",
+        "result": "# 变更事件"
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"timeout\"}",
+        "result": "# 变更事件"
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"pool\"}",
+        "result": "# 变更事件"
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"inventory\"}",
+        "result": "# 变更事件\n  2026-09-24T05:45:32+08:00  inventory.W_INVENTORY_DOWNSTREAM_RETRIES: 1 → 5  by=injector"
+      }
+    ]
+  }
+]

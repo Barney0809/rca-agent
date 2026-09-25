@@ -321,6 +321,7 @@ def test_evidence_paths_are_derived_from_the_gitignore_negations() -> None:
     assert "runs/_eval/" not in got, "父目录级的反选被当成证据了（会把整个 runs/ 拷一份）"
     assert "runs/_eval/baseline-20260925-085629/" in got
     assert "runs/_eval/multi-20260925-112648/" in got
+    assert "runs/_eval/multi-20260925-131953/" in got
     assert "runs/_recordings/record-deepseek-flash.ndjson" in got
 
 
@@ -334,7 +335,8 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     这里守两个不变量：证据在磁盘上、且 `.gitignore` 里**显式反选**了它们。
     （只需读文件、不用调 git —— 与仓库里其它"离线结构守卫"同一路子。）
     """
-    for name in ("baseline-20260925-085629", "multi-20260925-112648"):
+    for name in ("baseline-20260925-085629", "multi-20260925-112648",
+                 "multi-20260925-131953"):
         p = ROOT / "runs" / "_eval" / name / "results.json"
         assert p.exists(), f"定稿证据缺失：{p}（数字就没有可核对的来源了）"
 
@@ -344,7 +346,8 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     # 父目录整体被排除时 git 不会再看反选规则 ⇒ 必须是 `runs/*` 而不是 `runs/`
     assert "runs/*" in lines, "`runs/` 写成了整目录排除，下面的反选会失效"
     assert "runs/" not in lines, "`runs/` 会把证据一起排除掉"
-    for name in ("baseline-20260925-085629", "multi-20260925-112648"):
+    for name in ("baseline-20260925-085629", "multi-20260925-112648",
+                 "multi-20260925-131953"):
         assert f"!runs/_eval/{name}/" in lines, f"{name} 的证据没有被反选进仓库"
     assert "!runs/_recordings/record-deepseek-flash.ndjson" in lines, "录制也没进仓库"
 
@@ -373,7 +376,7 @@ def test_outward_facing_docs_mark_unbuilt_layers_instead_of_presenting_them_as_b
     src = "\n".join(
         p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "src").rglob("*.py")
     )
-    docs = ("README.md", "docs/08-项目总览.md", "docs/07-面试讲述稿.md")
+    docs = ("README.md", "docs/08-项目总览.md", "docs/07-面试讲述稿.md", "docs/架构图.svg")
 
     for name in docs:
         path = ROOT / name
