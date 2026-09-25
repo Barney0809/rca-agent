@@ -657,5 +657,36 @@
         ]
       }
     ]
+  },
+  "trace_persistence": {
+    "harness_log": [
+      "#29"
+    ],
+    "why": "#29: the per-step trace (which tool was called, with what arguments, and what came back) was collected all along but never archived -- so an archived run showed the conclusion and the numbers while containing no raw evidence at all, which contradicts FR-C (reproducibility). The trace must be persisted, but NOT inside results.json (megabytes of tool output would make the summary unreadable).",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "trace-a-never-write-the-trace-files",
+        "desc": "Stop writing the trace files. The archive again keeps only the conclusion and the numbers, with no raw evidence behind them.",
+        "file": "eval/runner.py",
+        "find": "        if not a.trace:\n            continue",
+        "replace": "        if True:\n            continue",
+        "expect_red": [
+          "tests/test_eval.py::test_trace_is_saved_beside_the_report_not_inside_it"
+        ]
+      },
+      {
+        "id": "trace-b-put-the-raw-trace-into-the-summary",
+        "desc": "Serialise the raw trace into results.json instead of a side file. The summary becomes unreadable and undiffable -- which is why the trace goes to traces/ in the first place.",
+        "file": "eval/runner.py",
+        "find": "        d = {k: v for k, v in self.__dict__.items() if k != \"trace\"}",
+        "replace": "        d = dict(self.__dict__)",
+        "expect_red": [
+          "tests/test_eval.py::test_trace_is_saved_beside_the_report_not_inside_it"
+        ]
+      }
+    ]
   }
 }

@@ -104,12 +104,20 @@ class Attempt:
     # ★ 打转统计（D9）：参数完全相同的重复工具调用次数。
     #   默认为 0 —— 这样既有的 results.json 仍能被 load_report 读回。
     repeat_calls: int = 0
-    # 多 Agent 模式下的额外信息（交叉质证的改变次数、驳回项、分歧等）。
+    # ★ 完整轨迹（D11）：每一步调了什么工具、参数是什么、返回了什么。
+    #   ⚠️ **不写进 results.json**（那是给人和脚本读的汇总，会被几 MB 的工具返回撑爆），
+    #      而是由 save_report 单独落到 traces/ 下，这里只记路径。
+    trace: list = field(default_factory=list)
+    trace_path: str = ""    # 多 Agent 模式下的额外信息（交叉质证的改变次数、驳回项、分歧等）。
     # 默认为空 dict —— 这样既有的 results.json 仍能被 load_report 读回。
     detail: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return self.__dict__.copy()
+        # ⚠️ trace 要**排除**：它是几 MB 的原始工具返回，
+        #    塞进 results.json 会让那个文件没法读（也没法 diff）。
+        #    它单独落在 traces/ 下，这里只留路径。
+        d = {k: v for k, v in self.__dict__.items() if k != "trace"}
+        return d
 
 
 @dataclass
@@ -356,6 +364,7 @@ def _run_baseline_slice(
         #   工具调用全走 ToolBox，所以计数都在它身上。
         repeat_calls=getattr(ctx, "repeat_calls", 0),
         detail=jd,
+        trace=list(getattr(diag, "trace", []) or []),
         # ⚠️ 裁判的成本**必须回填**，否则"总计"低估真实花费
         cost_yuan=diag.cost_yuan + jd.get("judge_cost_yuan", 0.0),
     )
@@ -809,6 +818,18 @@ def save_report(report: Report) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = RUNS_DIR / "_eval" / f"{report.agent}-{stamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 先把轨迹落盘，再写汇总 —— 顺序无所谓，但路径要先进 results.json
+    traces_dir = out_dir / "traces"
+    for a in report.attempts:
+        if not a.trace:
+            continue
+        traces_dir.mkdir(parents=True, exist_ok=True)
+        fp = traces_dir / f"{a.fault_id}-r{a.round_no}.json"
+        fp.write_text(
+            json.dumps(a.trace, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        a.trace_path = str(fp.relative_to(ROOT))
+
     path = out_dir / "results.json"
     path.write_text(
         json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"

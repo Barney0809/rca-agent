@@ -1065,3 +1065,81 @@ def test_the_dismissed_fixture_check_is_not_vacuous():
 
     n = sum(1 for fx in ADVERSARIAL if fx["expected"] == DISMISSED)
     assert n >= 10, f"只有 {n} 条 dismissed 样本 —— 太少，那条检查意义有限"
+
+# ================================================================
+# #29 trace 没被存档 —— 项目最强调可复现，却答不出「Agent 到底做了什么」
+# ================================================================
+#
+# 真实缺口（D11 第一步查出来的）：
+#   `Diagnosis.trace` / `Hypothesis.trace` 一直在收集（每一步调了什么工具、
+#   参数是什么、返回了什么），但 **`results.json` 里没有它**。
+#
+# ⇒ 后果：拿着存档，你能看到"结论"和"几个数字"，
+#   **却看不到任何一条原始证据**。而本项目的 FR-C 是"可复现"——
+#   面试官拿到存档本该能自己追溯，而不是只能相信里面写好的布尔值。
+#   （与 #18「存档漏 finished」、#19「存档截断结论」是同一个家族。）
+#
+# 设计取舍：trace 里是几 MB 的工具原始返回，
+# **不能塞进 results.json**（那个文件是给人读的汇总）。
+# 所以单独落到 `traces/` 下，汇总里只记路径。
+
+
+def test_trace_is_saved_beside_the_report_not_inside_it(tmp_path, monkeypatch):
+    """核心：轨迹要**单独落盘**，汇总里只留路径。
+
+    两个断言缺一不可：
+      · traces/ 下真的写出了文件（证据没丢）
+      · results.json 里**没有**塞进原始 trace（汇总仍然可读）
+    """
+    import json as _json
+
+    from eval.runner import Attempt, Report, load_report, save_report
+
+    a = Attempt(
+        fault_id="F1", round_no=1, correct=True, explanation="", root_cause="x",
+        steps=3, tool_calls=2, cost_yuan=0.01, input_tokens=1, output_tokens=1,
+        elapsed_s=1.0, finished=True, parse_ok=True,
+        trace=[
+            {"step": 1, "tool": "query_logs", "args": "{}", "result": "…" * 500},
+            {"step": 2, "tool": "query_metrics", "args": "{}", "result": "…"},
+        ],
+    )
+    report = Report(model="m", mode="live", rounds=1, started_at="t", attempts=[a])
+
+    monkeypatch.setattr("eval.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("eval.runner.ROOT", tmp_path)
+    path = save_report(report)
+
+    # ① 轨迹文件真的写出来了
+    traces = list((path.parent / "traces").glob("*.json"))
+    assert len(traces) == 1, f"轨迹没有落盘：{traces}"
+    saved = _json.loads(traces[0].read_text(encoding="utf-8"))
+    assert len(saved) == 2 and saved[0]["tool"] == "query_logs"
+
+    # ② 汇总里只有路径，没有原始轨迹
+    raw = _json.loads(path.read_text(encoding="utf-8"))
+    att = raw["attempts"][0]
+    assert "trace" not in att, "原始轨迹不许塞进 results.json（会把汇总撑爆）"
+    assert att["trace_path"], "汇总里必须留下轨迹文件的路径"
+
+    # ③ 路径能反查回文件
+    reloaded = load_report(path)
+    assert reloaded.attempts[0].trace_path == att["trace_path"]
+
+
+def test_accounts_without_a_trace_still_load(tmp_path, monkeypatch):
+    """老存档（没有 trace / trace_path 字段）必须仍然能被读回。"""
+    from eval.runner import Attempt, Report, load_report, save_report
+
+    a = Attempt(
+        fault_id="F1", round_no=1, correct=True, explanation="", root_cause="x",
+        steps=1, tool_calls=0, cost_yuan=0.0, input_tokens=0, output_tokens=0,
+        elapsed_s=0.0, finished=True, parse_ok=True,
+    )
+    report = Report(model="m", mode="live", rounds=1, started_at="t", attempts=[a])
+    monkeypatch.setattr("eval.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("eval.runner.ROOT", tmp_path)
+    path = save_report(report)
+
+    assert not (path.parent / "traces").exists(), "没有轨迹时不该造一个空目录"
+    assert load_report(path).attempts[0].trace_path == ""
