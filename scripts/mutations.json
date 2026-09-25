@@ -709,5 +709,48 @@
         ]
       }
     ]
+  },
+  "pricing_tier_disclosure": {
+    "harness_log": [
+      "#30"
+    ],
+    "why": "#30: I compared two multi runs' costs across different pricing tiers and reported a 2.1x 'cost increase' that was actually just the peak-hour tariff (peak rates are exactly 2x off-peak). The numbers looked merely different, so the mistake was invisible. The seal is to record and print each run's pricing tier, and to state the comparison rule.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "tier-a-stop-printing-the-tier",
+        "desc": "Stop printing the pricing tier. The flag is still archived but the report no longer warns, so a reader comparing runs sees only 'different numbers'.",
+        "file": "eval/runner.py",
+        "find": "        tier_cn = \"峰时（单价 2×）\" if report.pricing_tier == \"peak\" else \"谷时（单价 1×）\"\n        print(f\"  ⚠️ 计价时段：{tier_cn} —— **只与同时段的运行比较成本**\")",
+        "replace": "        pass",
+        "expect_red": [
+          "tests/test_eval.py::test_report_prints_the_pricing_tier",
+          "tests/test_eval.py::test_off_peak_runs_are_labelled_too"
+        ]
+      }
+    ]
+  },
+  "holiday_pricing": {
+    "harness_log": [
+      "#31"
+    ],
+    "why": "#31: the pricing model ignored statutory holidays. DeepSeek bills Chinese statutory holidays (and shifted working weekends) as OFF-PEAK ALL DAY, so during the Mid-Autumn/National-Day window every run after 09:00 was charged at double the real price. Worse, I then read that inflated figure as a genuine cost increase and wrote it into the docs. An over-estimate is harmless only until you compare two of them.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "holiday-a-ignore-the-calendar",
+        "desc": "Drop the holiday check, so statutory holidays are billed at peak rates. Costs during the holiday window then come out at double the real price.",
+        "file": "src/rca/llm/provider.py",
+        "find": "    if now.strftime(\"%Y-%m-%d\") in HOLIDAYS_2026:\n        return False\n",
+        "replace": "",
+        "expect_red": [
+          "tests/test_eval.py::test_holidays_are_billed_off_peak"
+        ]
+      }
+    ]
   }
 }

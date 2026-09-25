@@ -1182,3 +1182,126 @@ def test_multi_attempt_carries_every_components_trace():
     roles = {t["role"] for t in attempt.trace}
     assert roles == {"logs", "metrics", "change"}
     assert all(t["steps"] for t in attempt.trace), "每个环节都要带自己的工具调用"
+
+# ================================================================
+# #30 跨计价时段比较成本 → 假的"成本翻倍"
+# ================================================================
+#
+# 真实错误（**我自己犯的**）：
+#   multi 同配置重跑，成本从 ¥0.0674 涨到 ¥0.1414（2.10×），
+#   我把它当成"代码改动导致变贵"写进了文档。
+#
+#   查下去才发现：**两次运行的计价时段不同** ——
+#     08:00 那次是**谷时**（0.02/1.0/4.0），09:42 那次是**峰时**（0.04/2.0/8.0），
+#     峰时单价整整是谷时的 **2 倍**。0.1414 / 0.0674 = 2.10 ≈ 2。
+#
+#   ⇒ 那个"暴涨"几乎完全是**时段**造成的，跟代码无关。
+#     正确的同口径比较是 08:00 的 multi（¥0.0674）对 08:35 的 baseline（¥0.0172）
+#     = **3.9×**，而不是我写下的 8.2×。
+#
+# 这属于本项目一直在抓的那一类：**数字算出来了，但两个数字的口径不同。**
+# 机制上的封堵：**每次运行把计价时段记进存档并打出来**。
+
+
+def test_report_records_the_pricing_tier():
+    """运行必须把计价时段记进 results.json 并打印出来。
+
+    不记的话，"跨时段比较成本"这个错误**无法被发现** ——
+    因为两个数字看起来只是"不一样"，看不出是单价不同。
+    """
+    from eval.runner import Report
+
+    r = Report(model="m", mode="live", rounds=1, started_at="t", pricing_tier="peak")
+    assert r.to_dict()["pricing_tier"] == "peak"
+
+
+def test_report_prints_the_pricing_tier(capsys):
+    from eval.runner import Report, print_report
+
+    r = Report(
+        model="m", mode="live", rounds=3, started_at="t",
+        pricing_tier="peak",
+        attempts=[_attempt_with("F1", correct=True) for _ in range(3)],
+    )
+    print_report(r)
+    out = capsys.readouterr().out
+
+    assert "峰时" in out, "必须打出来，否则读者无从知道单价是普通的 2 倍"
+    assert "只与同时段的运行比较成本" in out, "还要明确给出比较纪律"
+
+
+def test_off_peak_runs_are_labelled_too(capsys):
+    """正向对照：谷时也要标明 —— 只说峰时会让人以为"没标=谷时"。"""
+    from eval.runner import Report, print_report
+
+    r = Report(
+        model="m", mode="live", rounds=3, started_at="t", pricing_tier="off_peak",
+        attempts=[_attempt_with("F1", correct=True) for _ in range(3)],
+    )
+    print_report(r)
+    assert "谷时" in capsys.readouterr().out
+
+# ================================================================
+# #31 计价模型漏掉法定节假日 → 成本虚高一倍，并被我误读成"成本涨了"
+# ================================================================
+#
+# 真实事件（**我自己犯的，而且被用户一句话问出来的**）：
+#
+#   multi 同配置重跑，报告成本从 ¥0.0674 涨到 ¥0.1414（**2.10×**）。
+#   我把原因归给"计价时段不同"（08:00 谷时 vs 09:42 峰时），并**写进了文档**。
+#
+#   用户反问：「今天不是节假日吗，真的有峰时问题吗？」
+#   查证（2026-09-25 是中秋，正在中秋+国庆的十天半价窗口里）：
+#     DeepSeek 官方规则 —— **调休上班的周末、中国法定节假日全天均按空闲时段计费**。
+#   ⇒ 09:42 的真实计费**仍是谷时**，而我的 `is_peak_hour()` 按峰时算，
+#     **把成本算高了一倍**；然后我又把这个虚高的数字当成了"成本真的涨了"。
+#
+#   ⇒ 代码注释里原本写着「不处理节假日，误差方向是高估成本，属于保守估计，可以接受」。
+#     **那个判断是错的**：高估本身无害，但**一旦拿它去比较两次运行的增减**，
+#     它就会变成一个**假的成本变化**。
+
+
+def test_holidays_are_billed_off_peak():
+    """法定节假日**全天**按空闲时段计费（官方规则，2026-09 查证）。
+
+    漏掉这一条不只是"算贵了一点" —— 它会让假日期间的成本变成峰时价的 2 倍，
+    而那个数字一旦被用来比较增减，就会得出**假的成本变化**（#31）。
+    """
+    from datetime import datetime
+
+    from rca.llm.provider import is_peak_hour
+
+    # 中秋（2026-09-25 周五）—— 峰时段内也应是空闲
+    assert is_peak_hour(datetime(2026, 9, 25, 10, 0)) is False
+    assert is_peak_hour(datetime(2026, 9, 25, 15, 0)) is False
+    # 国庆窗口内
+    assert is_peak_hour(datetime(2026, 10, 7, 10, 0)) is False
+
+
+def test_normal_workdays_are_still_peak():
+    """正向对照：**普通工作日**必须仍然是峰时。
+
+    否则"假日算谷时"可能退化成"永远算谷时"，成本会被系统性低估 —— 那是反向的错。
+    """
+    from datetime import datetime
+
+    from rca.llm.provider import is_peak_hour
+
+    assert is_peak_hour(datetime(2026, 10, 9, 10, 0)) is True
+    assert is_peak_hour(datetime(2026, 10, 9, 15, 0)) is True
+    # 午休与下班后仍是空闲
+    assert is_peak_hour(datetime(2026, 10, 9, 13, 0)) is False
+    assert is_peak_hour(datetime(2026, 10, 9, 20, 0)) is False
+    # 周末
+    assert is_peak_hour(datetime(2026, 10, 10, 10, 0)) is False
+
+
+def test_the_holiday_table_is_not_empty_and_is_dated():
+    """元测试：节假日表不能是空的，否则上一条测的是空气；
+    而且它**必须能被一眼看出是给哪一年用的**（否则明年会静默失效）。"""
+    from rca.llm.provider import HOLIDAYS_2026
+
+    assert len(HOLIDAYS_2026) >= 7, f"节假日表太小：{sorted(HOLIDAYS_2026)}"
+    assert all(d.startswith("2026-") for d in HOLIDAYS_2026), (
+        "表名里写了年份，条目也必须是同一年 —— 否则跨年时会静默算错"
+    )

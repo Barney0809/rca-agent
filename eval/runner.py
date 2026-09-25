@@ -127,6 +127,9 @@ class Report:
     rounds: int
     started_at: str
     agent: str = "baseline"
+    # ★ 计价时段（D11/#30）：峰时单价是谷时的 **2 倍**（0.04/2.0/8.0 vs 0.02/1.0/4.0）。
+    #   不记下来的话，跨时段比较成本会得出**假的一倍增长** —— 我自己就踩了（#30）。
+    pricing_tier: str = ""
     attempts: list[Attempt] = field(default_factory=list)
 
     # ---- 聚合 ----
@@ -225,6 +228,7 @@ class Report:
     def to_dict(self) -> dict:
         return {
             "agent": self.agent,
+            "pricing_tier": self.pricing_tier,
             "model": self.model,
             "mode": self.mode,
             "rounds": self.rounds,
@@ -266,6 +270,8 @@ def run(
         started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
     )
     report.agent = agent
+    from rca.llm.provider import is_peak_hour
+    report.pricing_tier = "peak" if is_peak_hour() else "off_peak"
 
     if not runs:
         print("没有找到可用场景。先跑：python scripts/inject_fault.py scenario F1")
@@ -762,6 +768,11 @@ def print_report(report: Report) -> None:
     print("=" * 96)
     print(f"  {report.agent} 评测   模型 {report.model}   模式 {report.mode}  "
           f"{agg['n_rounds']} 轮 × {len(agg['per_fault'])} 场景 = {agg['n_attempts']} 次")
+    if report.pricing_tier:
+        # ⚠️ 必须打出来：峰时单价是谷时的 2 倍，
+        #    **跨时段比较成本会得出假的一倍增长**（harness-log #30，我自己踩过）
+        tier_cn = "峰时（单价 2×）" if report.pricing_tier == "peak" else "谷时（单价 1×）"
+        print(f"  ⚠️ 计价时段：{tier_cn} —— **只与同时段的运行比较成本**")
     if agg["n_rounds"] < 3:
         print("  ⚠️ 轮数少于 3，噪声带不可信 —— 单轮结果只是在如实反映'没测出波动'")
     print()
