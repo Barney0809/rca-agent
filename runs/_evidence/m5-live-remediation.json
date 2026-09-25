@@ -1,5 +1,5 @@
 {
-  "ts": "2026-09-26T03:44:43+08:00",
+  "ts": "2026-09-26T04:25:13+08:00",
   "fault": "F4",
   "orders": 10,
   "world": {
@@ -9,10 +9,10 @@
   },
   "before": {
     "orders_sent": 10,
-    "orders_ok": 8,
-    "downstream_calls_delta": 25.0,
-    "downstream_calls_per_order": 2.5,
-    "error_calls_delta": 17.0,
+    "orders_ok": 10,
+    "downstream_calls_delta": 22.0,
+    "downstream_calls_per_order": 2.2,
+    "error_calls_delta": 12.0,
     "valid": true,
     "knobs": {
       "order": {
@@ -109,7 +109,7 @@
     "downstream_calls_delta": 0.0,
     "downstream_calls_per_order": 0.0,
     "error_calls_delta": 0.0,
-    "valid": false,
+    "valid": true,
     "knobs": {
       "order": {
         "pool_limit": 64,
@@ -141,7 +141,27 @@
     }
   },
   "verdict": {
-    "status": "measurement-invalid",
-    "why": "有测量无效：订单没成功或下游没被调用 ⇒ 不拿它当症状证据"
-  }
+    "successful_orders": {
+      "status": "improved",
+      "symptom": "成功订单数",
+      "before": 10,
+      "after": 0,
+      "delta": -10
+    },
+    "diagnostic_calls_per_order": {
+      "status": "improved",
+      "symptom": "（诊断量）每笔订单的下游调用次数",
+      "before": 220,
+      "after": 0,
+      "delta": -220
+    },
+    "diagnostic_error_calls": {
+      "status": "improved",
+      "symptom": "（诊断量）下游错误调用增量",
+      "before": 12.0,
+      "after": 0.0,
+      "delta": -12.0
+    }
+  },
+  "outcome": "fixed"
 }

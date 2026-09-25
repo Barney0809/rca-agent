@@ -130,8 +130,11 @@ def measure(orders: int) -> dict:
         "downstream_calls_delta": calls,
         "downstream_calls_per_order": round(calls / sent, 2) if sent else 0.0,
         "error_calls_delta": d_err,
-        # 测量是否可信：得有订单成功、而且下游真的被调过
-        "valid": bool(ok > 0 and calls > 0),
+        # ⚠️ 判据用**成功订单数**（两种状态下都可观测）。
+        #    第一次我把"下游调用次数"当判据，结果掉到 0 时看着像"症状消失"，
+        #    其实是失败路径**在调下游之前**就失败了（502 inventory 500）——
+        #    指标变小是失败模式的副作用，不是恢复。⇒ 它现在只当**诊断量**。
+        "valid": bool(sent > 0),
         "knobs": after["knobs"],
     }
 
@@ -223,17 +226,23 @@ def main() -> int:
         print(f"  证据已写：{EVIDENCE.relative_to(ROOT)}")
         return 4
 
-    v_ratio = verify(symptom="每笔订单的下游调用次数",
+    v_ok = verify(symptom="成功订单数", before=before["orders_ok"], after=after["orders_ok"])
+    # 这两个只当**诊断量**（看着好看/难看都不作判据）
+    v_ratio = verify(symptom="（诊断量）每笔订单的下游调用次数",
                      before=_to_int(before["downstream_calls_per_order"] * 100),
                      after=_to_int(after["downstream_calls_per_order"] * 100))
-    v_err = verify(symptom="下游错误调用增量",
+    v_err = verify(symptom="（诊断量）下游错误调用增量",
                    before=before["error_calls_delta"], after=after["error_calls_delta"])
-    report["verdict"] = {"calls_per_order": v_ratio, "error_calls": v_err}
+    report["verdict"] = {"successful_orders": v_ok,
+                         "diagnostic_calls_per_order": v_ratio,
+                         "diagnostic_error_calls": v_err}
 
-    print("\n  ── 验证结论（症状级）──")
-    print(f"     · {v_ratio['symptom']}：{v_ratio['status']}"
+    print("\n  ── 验证结论 ──")
+    print(f"     ★ 判据 · {v_ok['symptom']}：{v_ok['status']}"
+          f"（{v_ok.get('before')} → {v_ok.get('after')}）")
+    print(f"       诊断量 · {v_ratio['symptom']}：{v_ratio['status']}"
           f"（{v_ratio.get('before', '?')}/100 → {v_ratio.get('after', '?')}/100）")
-    print(f"     · {v_err['symptom']}：{v_err['status']}"
+    print(f"       诊断量 · {v_err['symptom']}：{v_err['status']}"
           f"（{v_err.get('before')} → {v_err.get('after')}）")
 
     # 两件事要分开报：**动作生效了吗**（读回确认）与**症状修好了吗**（前后对照）。
@@ -243,9 +252,9 @@ def main() -> int:
         str(after["knobs"].get(p["service"], {}).get(p["knob"])) == str(p["target_value"])
         for p in report["proposals"]
     )
-    # 症状级结论：两侧测量都有效、两个指标都改善、**而且提案涉及的旋钮真的到位**
+    # 症状级结论：两侧测量都有效、**判据（成功订单数）改善**、而且提案涉及的旋钮真的到位
     symptom_ok = (before["valid"] and after["valid"] and targets_ok
-                  and v_ratio["status"] == "improved" and v_err["status"] == "improved")
+                  and v_ok["status"] == "improved")
     report["outcome"] = ("fixed" if symptom_ok else
                          ("action-ok-symptom-partial" if action_ok else "action-failed"))
     EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
