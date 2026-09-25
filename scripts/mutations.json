@@ -1303,7 +1303,7 @@
     "harness_log": [
       "#53"
     ],
-    "why": "#53: --mode replay had NEVER actually run to completion, yet 'a stranger can replay for free' was written into the docs as a shipped capability. The real cause is structural: the recording key is sha256(tag+model+messages) and the tag embeds the scenario directory name (a fault-injection timestamp), so any fresh set of scenario dirs misses on the very first call. Replay therefore needs the recording AND the same scenario dirs (same names, same bytes). Five invariants make that checkable instead of aspirational: (a) the gzipped log a pack ships must be byte-equivalent to the plain log, or the key changes and replay misses while looking like a model/code problem; (b) a tampered pack file must be refused; (c) a missing pack file must be refused, not turned into a confusing crash; (d) RCA_REPLAY_ROOT must really move the data root; (e) a replay run must never be published as a measurement -- replay is identical by construction, so publishing it silently replaces the page's accuracy/cost with a re-reading.",
+    "why": "#53: --mode replay had NEVER actually run to completion, yet 'a stranger can replay for free' was written into the docs as a shipped capability. The real cause is structural: the recording key is sha256(tag+model+messages) and the tag embeds the scenario directory name (a fault-injection timestamp), so any fresh set of scenario dirs misses on the very first call. Replay therefore needs the recording AND the same scenario dirs (same names, same bytes). Five invariants make that checkable instead of aspirational: (a) the gzipped log a pack ships must be byte-equivalent to the plain log, or the key changes and replay misses while looking like a model/code problem; (b) a tampered pack file must be refused; (c) a missing pack file must be refused, not turned into a confusing crash; (d) RCA_REPLAY_ROOT must really move the data root; (e) a replay run must never be published as a measurement -- replay is identical by construction, so publishing it silently replaces the page's accuracy/cost with a re-reading; (f) the pack must be read-only -- any non-replay mode has to be refused, because the recording path is derived from the same data root, so --mode record appends a record-*.ndjson INSIDE the pack, and the self-check cannot see it (it only hashes the files listed in the manifest).",
     "tests": [
       "tests/test_replay_pack.py"
     ],
@@ -1356,6 +1356,16 @@
         "replace": "        if False:\n            continue",
         "expect_red": [
           "tests/test_replay_pack.py::test_demo_page_never_publishes_a_replay_run"
+        ]
+      },
+      {
+        "id": "replay-f-read-only-pack-accepts-record-mode",
+        "desc": "Let every mode run on the read-only pack again. --mode record then appends a record-*.ndjson INSIDE the pack, and the pack self-check cannot see it, because it only hashes the files listed in the manifest -- silent pollution of a read-only artifact, found while auditing this very session.",
+        "file": "eval/runner.py",
+        "find": "    if mode != \"replay\":\n        raise RuntimeError(",
+        "replace": "    if False:\n        raise RuntimeError(",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_replay_pack_is_read_only_for_every_other_mode"
         ]
       }
     ]

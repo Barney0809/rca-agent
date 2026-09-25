@@ -147,14 +147,35 @@ def test_replay_never_writes_and_never_falls_back(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------- 5) 仓库里的包
 
-@pytest.mark.skipif(not (PACK / "pack.json").exists(), reason="仓库未附带重放包")
-def test_committed_replay_pack_is_intact() -> None:
+@pytest.mark.skipif(not (PACK / "pack.json").exists(), reason="本机没有重放包")
+def test_local_replay_pack_is_intact_if_present() -> None:
+    """⚠️ 名字里的 local 是有意的（2026-09-25 自审时改的名）。
+
+    这个包**未随仓库提交**（约 4.4 MB，见 docs/00 的开放项），
+    所以这条用例在**干净克隆里只会 skip** —— 原来的名字
+    `test_committed_replay_pack_is_intact` 是在说一句不成立的话
+    （"committed" 的那份并不存在），和 #38 是同一族错误：
+    把"只在我这台机器上成立"写成"仓库里成立"。
+    """
     manifest = runner.verify_replay_pack(PACK)
     scenario_ids = {v["run_id"] for v in manifest["scenarios"].values()}
     assert len(scenario_ids) >= 1
     # 目录名就是 tag 的一部分：改名等于让回放 miss，所以必须在清单里对得上
     for name in scenario_ids:
         assert (PACK / name).is_dir(), f"清单里的场景目录不存在：{name}"
+
+
+def test_replay_pack_is_read_only_for_every_other_mode() -> None:
+    """只读包上只允许 replay —— 否则 `--mode record` 会往包里追加录制文件。
+
+    自审时发现的真实缺口：`run()` 的录制路径也走 `data_root()`，
+    所以设了 `RCA_REPLAY_ROOT` 之后 `--mode record` 会**写进只读产物**；
+    而包自检只校验清单里列出的文件，**新增的文件它看不见** ⇒ 静默污染。
+    """
+    for mode in ("record", "live", "auto", ""):
+        with pytest.raises(RuntimeError, match="只读重放包"):
+            runner.check_replay_root_mode(mode)
+    runner.check_replay_root_mode("replay")  # 不抛 = 允许
 
 
 # ---------------------------------------------------------------- 6) 回放不得冒充测量

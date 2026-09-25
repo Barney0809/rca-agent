@@ -120,6 +120,27 @@ def verify_replay_pack(root: Path) -> dict:
     return manifest
 
 
+def check_replay_root_mode(mode: str) -> None:
+    """重放包是**只读**的：只有 replay 模式允许在它上面跑。
+
+    为什么必须硬拒绝（2026-09-25 自审时发现，D19b）：
+
+    `run()` 里录制路径是 `data_root() / "_recordings" / f"{mode}-..."`，
+    而 `data_root()` 在设了 `RCA_REPLAY_ROOT` 时就是那个包 ——
+    于是 `--mode record` **会往只读产物里追加一个 `record-*.ndjson`**。
+
+    更麻烦的是它**不会报警**：自检只校验清单里列出的文件，
+    新增的文件它既看不见、也不会让任何断言变红。
+
+    ⇒ 把"在这个包上能做什么"变成一句可执行的判断，而不是一条注释。
+    """
+    if mode != "replay":
+        raise RuntimeError(
+            f"RCA_REPLAY_ROOT 指向的是只读重放包，只允许 --mode replay（当前 mode={mode!r}）。\n"
+            f"  要录新的批次，请去掉这个环境变量、用本机 runs/ 录。"
+        )
+
+
 # ================================================================
 # 场景发现
 # ================================================================
@@ -332,7 +353,9 @@ def run(
     cfg = LlmConfig.from_env()
     recorder = None
     if os.environ.get("RCA_REPLAY_ROOT", "").strip():
-        # 用重放包之前先验包：把「包坏了」和「真的没命中」分开。
+        # 只读包：先判断"在这个包上允许做什么"，再验包。
+        check_replay_root_mode(mode)
+        # 把「包坏了」和「真的没命中」分开。
         verify_replay_pack(data_root())
     if mode in ("record", "replay"):
         rec_path = data_root() / "_recordings" / f"{mode}-{model or cfg.model_cheap}.ndjson"

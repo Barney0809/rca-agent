@@ -138,9 +138,29 @@ uv run python eval/runner.py --agent baseline --rounds 3              # 单 Agen
 uv run python eval/runner.py --agent multi --faults F1,F8 --rounds 3  # 多 Agent，2 个场景
 ```
 
-`--mode replay` 可以完全从录制回放、**不调 API**（未命中会直接报错，不会悄悄花钱）；
-但仓库里提交的是 `record-*.ndjson`（用于成本分解的 3 次运行），
-**不是一份完整的 `replay-*.ndjson`** —— 所以"零成本重放整套评测"目前**还不成立**。
+`--mode replay` 可以完全从录制回放、**不调 API**（未命中会直接报错，不会悄悄花钱）。
+这条机制**已实测可用**（2026-09-25，见 harness-log #53）：把 API Key 换成假的、
+`DEEPSEEK_BASE_URL` 指向 `http://127.0.0.1:9`（该端口无人监听）之后，
+**7 场景 × 3 轮 = 21 次尝试照样跑完**（20 秒、exit 0）——
+任何一次真实调用都会立刻失败，所以"零 API 调用"是**实测**的，不是推断的。
+证据：`runs/_replay_pack/` 里的包 + `runs/_evidence/replay-zero-cost.md`。
+
+⚠️ 但它需要**两样东西同时在场**：录制文件 **+ 同一批场景目录**。
+因为录制 key 是 `sha256(tag+model+messages)`，而 tag 里嵌着场景目录名
+（`specialist/metrics/r-20260925-072345` —— 那是一次故障注入的**时间戳**），
+换一批目录必然第一步就 miss：
+
+```bash
+uv run python scripts/make_replay_pack.py             # 用你自己的 runs/ 打一个便携包
+$env:RCA_REPLAY_ROOT = "runs/_replay_pack"            # PowerShell（bash: export RCA_REPLAY_ROOT=...）
+uv run python eval/runner.py --agent multi --rounds 3 --mode replay
+```
+
+包本体（约 4.4 MB）**未随仓库提交**（开放项见 `docs/00-状态.md`），
+所以**陌生人克隆后还跑不了**零成本重放 —— 得先有场景目录与录制。
+另外：回放复现的是"录制内部自洽的那条轨迹"，**不等于**某一次归档运行
+（同一批响应下归档判 19/21、回放判 21/21），"一批录制 = 一次运行"还没做。
+这两条如实写在这里，不写成"已实现"。
 
 ---
 
