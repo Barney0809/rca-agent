@@ -170,3 +170,32 @@ def test_log_levels_are_not_treated_as_metric_names(bad: str) -> None:
     """实测误伤：结论里写「零 ERROR」曾被当成"点名了指标 ERROR"报了一条 block。"""
     trace = _trace(conclusion=f"整窗口零 {bad}，链路全部成功。")
     assert run_rules(trace) == []
+
+
+def test_baseline_is_judged_per_series_not_across_labels() -> None:
+    """**实测漏报的那一次**：三个 SKU 的三个值是"同一时刻的三个实体"，不是基线。
+
+    第一版把标签丢了、只数"这个指标出现过几个值" ⇒ F4 的真缺陷
+    （无基线的 `stock_level` 被当成根因）**被漏报**。
+    这里两侧都钉住：跨标签不算基线；同一序列出现第二个值才算。
+    """
+    cross_labels = _trace(with_claim=False)
+    cross_labels.add(ToolResult(
+        step=5, name="query_metrics", phase="investigate", role="metrics",
+        text='[inventory]\n  stock_level{sku="SKU-001"} = 998092\n'
+             '  stock_level{sku="SKU-002"} = 997912\n  stock_level{sku="SKU-003"} = 997953\n',
+    ))
+    cross_labels.add(Claim(step=6, text="根因是库存水位异常（stock_level 偏高）。",
+                           kind="final", phase="conclude"))
+    assert [f.rule for f in run_diagnostics(cross_labels)] == ["unbased_metric"]
+    assert run_rules(cross_labels) == [], "诊断量不该参与判定"
+
+    same_series = _trace(with_claim=False)
+    same_series.add(ToolResult(
+        step=5, name="query_metrics", phase="investigate", role="metrics",
+        text='[inventory]\n  stock_level{sku="SKU-001"} = 998092\n'
+             '  stock_level{sku="SKU-001"} = 995000\n',
+    ))
+    same_series.add(Claim(step=6, text="根因是库存水位下降（stock_level 在降低）。",
+                          kind="final", phase="conclude"))
+    assert run_diagnostics(same_series) == [], "同一序列有两个值 ⇒ 有参照 ⇒ 不该报"

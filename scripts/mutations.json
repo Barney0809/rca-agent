@@ -1390,6 +1390,67 @@
       }
     ]
   },
+  "guard_form_defects": {
+    "harness_log": [
+      "#55"
+    ],
+    "why": "#55: the guardrail's first version, measured on 21 archived attempts, caught 0 of 2 wrong answers and fired on 7 of 19 CORRECT ones. Three root causes, all of them my rule-writing: (a) three SKU labels were counted as a baseline for the same metric, so the real F4 defect was MISSED; (b) 'ERROR' (a log level) was treated as a metric name; (c) a rounded derived value ('3.2' from 4433/1400) missed the 1% tolerance, and unit conversion (4.22GB vs 4.22e+09 bytes in evidence) was not handled. After the fixes the two shipped rules are silent on all 21 real attempts and still catch injected form defects. The flagship rule unbased_metric measured 1/15 precision and was demoted to a diagnostic -- measured proof of ADR-0007 decision 1 (a guardrail cannot judge weighting without the answer).",
+    "tests": [
+      "tests/test_guard.py"
+    ],
+    "mutations": [
+      {
+        "id": "guard-a-ship-only-the-number-rule",
+        "desc": "Ship only the number rule, so a conclusion that invents a metric name is no longer caught -- the exact form defect the guard exists for.",
+        "file": "src/rca/guard/rules.py",
+        "find": "RULES = (rule_unsupported_claim, rule_unverifiable_number)",
+        "replace": "RULES = (rule_unverifiable_number,)",
+        "expect_red": [
+          "tests/test_guard.py::test_injected_fabricated_identifier_is_caught"
+        ]
+      },
+      {
+        "id": "guard-b-missing-conclusion-returns-nothing",
+        "desc": "Make the no-conclusion branch unreachable, so a trace without a conclusion event is judged as clean -- the #26 empty-green failure mode, this time inside the guard.",
+        "file": "src/rca/guard/rules.py",
+        "find": "    if not trace.final_claims:\n        return [",
+        "replace": "    if False:\n        return [",
+        "expect_red": [
+          "tests/test_guard.py::test_missing_conclusion_is_a_block_not_an_empty_list"
+        ]
+      },
+      {
+        "id": "guard-c-rounding-verification-always-false",
+        "desc": "Drop the 'rounds to the same value' check, so every number the model computed itself (97.9% -> '98%') is reported as a hallucination -- the measured false positive that made 7 of 19 correct answers fire.",
+        "file": "src/rca/guard/rules.py",
+        "find": "    try:\n        return round(cand, nd) == float(raw)",
+        "replace": "    try:\n        return False",
+        "expect_red": [
+          "tests/test_guard.py::test_derived_and_unit_converted_numbers_are_not_flagged"
+        ]
+      },
+      {
+        "id": "guard-d-baseline-ignores-labels",
+        "desc": "Go back to counting values across ALL label sets, so three SKUs look like a baseline and the real no-baseline defect is missed -- the exact miss measured on F4.",
+        "file": "src/rca/guard/rules.py",
+        "find": "            based = any(len(values) >= 2 for values in series[name].values())",
+        "replace": "            based = len({v for vs in series[name].values() for v in vs}) >= 2",
+        "expect_red": [
+          "tests/test_guard.py::test_baseline_is_judged_per_series_not_across_labels"
+        ]
+      },
+      {
+        "id": "guard-e-injection-does-nothing",
+        "desc": "Make the defect injector a no-op. The 'must fire' side of the acceptance rests on that injection -- if it silently stops injecting, the acceptance test passes while proving nothing.",
+        "file": "src/rca/guard/rules.py",
+        "find": "    out = Trace(label=f\"{trace.label}(已注入形式缺陷)\", stop_reason=trace.stop_reason)",
+        "replace": "    return trace",
+        "expect_red": [
+          "tests/test_guard.py::test_injected_fabricated_identifier_is_caught"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1403,7 +1464,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**274 passed / 1 skipped**",
+        "find": "**275 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1413,7 +1474,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**40 组 / 97 个变异体，全部 SEALED**",
+        "find": "**41 组 / 102 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1423,8 +1484,8 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**64 条**（其中 **53 条**由变异测试证明能变红，**11 条**",
-        "replace": "封堵清单：**99 条**（其中 **53 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**65 条**（其中 **54 条**由变异测试证明能变红，**11 条**",
+        "replace": "封堵清单：**99 条**（其中 **54 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
         ]
