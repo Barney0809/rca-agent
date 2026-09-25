@@ -752,5 +752,36 @@
         ]
       }
     ]
+  },
+  "output_cost_cap": {
+    "harness_log": [
+      "#32"
+    ],
+    "why": "D11 cost work, driven by measurement -- and then REFUTED by measurement. A breakdown of one multi diagnosis (33 calls) showed output tokens are 72.3% of cost, so caps of 800/1200 were added to the two biggest producers. The follow-up recording showed the caps were WORSE: 4 replies were cut mid-JSON, parsing failed, the #27 nudge fired, and the run made 33 -> 57 calls with 14,646 -> 25,883 output tokens (+77%). The caps are therefore demoted to pure backstops (2400), above the largest observed non-truncated output.",
+    "tests": [
+      "tests/test_agents.py"
+    ],
+    "mutations": [
+      {
+        "id": "cap-a-drop-the-cross-exam-cap",
+        "desc": "Remove the cap from the cross-examination call site, the single largest output producer measured.",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "            max_tokens=2400,\n            tag=f\"crossexam/{role.key}/{local_ctx.run_id}\",",
+        "replace": "            tag=f\"crossexam/{role.key}/{local_ctx.run_id}\",",
+        "expect_red": [
+          "tests/test_agents.py::test_output_heavy_stages_pass_a_cap"
+        ]
+      },
+      {
+        "id": "cap-b-give-the-coordinator-a-tighter-cap-than-cross-exam",
+        "desc": "Make the adjudicator's cap tighter than the cross-examination's. Saving a fraction of a cent by forcing the adjudicator to write its rejections incompletely is a bad trade, and the test must refuse it.",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "        max_tokens=2400,\n        tag=\"coordinator\",",
+        "replace": "        max_tokens=300,\n        tag=\"coordinator\",",
+        "expect_red": [
+          "tests/test_agents.py::test_coordinator_cap_is_not_tighter_than_cross_exam"
+        ]
+      }
+    ]
   }
 }

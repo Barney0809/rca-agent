@@ -577,3 +577,68 @@ def test_all_three_call_sites_share_the_same_repair_logic():
         src = (root / rel).read_text(encoding="utf-8")
         assert "from .contract import repair_messages" in src, f"{rel} 没接上 JSON 催促"
         assert "repair_messages(messages, result.text)" in src, f"{rel} 没用共享的补救函数"
+
+# ================================================================
+# D11 成本优化：给"输出大户"加确定性的输出上限
+# ================================================================
+#
+# 实测依据（`scripts/cost_breakdown.py`，一次 multi 诊断的 33 次调用）：
+#
+#     缓存命中输入  2.0%   /   未命中输入  25.7%   /   **输出  72.3%**
+#
+# ⇒ 成本大头是**输出**，而最大的几次来自交叉质证与裁决
+#   （曾见 crossexam/metrics 1626 tok、coordinator 1293 tok）。
+# ⇒ 与其在提示词里"请求简洁"（靠自觉），不如给一个**确定性的上限**。
+
+
+def test_chat_accepts_an_explicit_max_tokens():
+    """`chat()` 必须支持显式 `max_tokens`。
+
+    ⚠️ 与 #15 的区别：那次是**误传了一个不存在的参数**（修法是删掉），
+       这次是**把它做成受支持的参数** —— 两件事，别混。
+    """
+    import inspect
+
+    from rca.llm.provider import DeepSeekClient
+
+    params = inspect.signature(DeepSeekClient.chat).parameters
+    assert "max_tokens" in params, "chat() 需要支持显式输出上限"
+    assert params["max_tokens"].default is None, "默认必须是 None（回落到配置）"
+
+
+def test_output_heavy_stages_pass_a_cap():
+    """交叉质证与裁决这两个"输出大户"必须显式传上限。
+
+    结构性检查（不实际发请求）：读源码确认那两个调用点带了 `max_tokens=`。
+    """
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parent.parent
+           / "src" / "rca" / "agents" / "coordinator.py").read_text(encoding="utf-8")
+    for tag in ('tag=f"crossexam/', 'tag="coordinator"'):
+        i = src.index(tag)
+        window = src[max(0, i - 400): i]
+        assert "max_tokens=" in window, (
+            f"{tag} 这个调用点没有输出上限 —— 它是实测的成本大头（输出占 72%）"
+        )
+
+
+def test_coordinator_cap_is_not_tighter_than_cross_exam():
+    """裁决的上限**不能**比质证更紧。
+
+    裁决要逐条写「为什么否掉」加 `dissent`，压太紧会让它写不全，
+    从而**为了省几分钱换来更差的结论** —— 那就本末倒置了。
+    """
+    import re
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parent.parent
+           / "src" / "rca" / "agents" / "coordinator.py").read_text(encoding="utf-8")
+
+    def cap_before(tag: str) -> int:
+        i = src.index(tag)
+        m = re.findall(r"max_tokens=(\d+)", src[max(0, i - 400): i])
+        assert m, f"{tag} 附近找不到 max_tokens"
+        return int(m[-1])
+
+    assert cap_before('tag="coordinator"') >= cap_before('tag=f"crossexam/')

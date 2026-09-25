@@ -189,6 +189,7 @@ class DeepSeekClient:
         tools: list[dict] | None = None,
         temperature: float = 0.0,
         thinking: bool | None = None,
+        max_tokens: int | None = None,
         tag: str = "",
     ) -> LlmResult:
         """发一次对话请求。
@@ -199,10 +200,19 @@ class DeepSeekClient:
         use_model = model or self.config.model_cheap
         use_thinking = self.config.thinking if thinking is None else thinking
 
+        # ⚠️ `max_tokens` 现在是一个**显式参数**（默认仍取配置）。
+        #    为什么需要它（D11 成本优化）：
+        #      `scripts/cost_breakdown.py` 实测一次 multi 诊断的成本构成是
+        #        缓存命中输入 2.0% / 未命中输入 25.7% / **输出 72.3%**
+        #      —— 成本大头是**输出**，而最大的几次来自交叉质证与裁决。
+        #      所以给这两个环节一个**确定性的输出上限**，比"在提示词里请求简洁"可靠。
+        #
+        #    ⚠️ 注意与 harness-log #15 的区别：那次是**误传了一个不存在的参数**，
+        #       修法是删掉它；这次是**把它做成受支持的参数** —— 两件事。
         kwargs: dict = {
             "model": use_model,
             "messages": messages,
-            "max_tokens": self.config.max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
         }
         # 思考模式与 temperature 的兼容性：思考模式不支持 temperature，
         # 传了会被忽略并告警。所以只在非思考模式下传。
