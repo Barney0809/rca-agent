@@ -66,6 +66,27 @@ def _status_cls(status: str) -> str:
     return "bad"
 
 
+#: 交付页**描述的那一次运行** —— 显式钉住，而不是"取最新"。
+#:
+#: 为什么（2026-09-26，自审时在干净克隆里抓到的真问题）：
+#: 我后来把 M2 的两臂（护栏关/护栏开）的 `results.json` 也入库了，
+#: 于是 `latest()` 按（尝试数, 名字）挑选时**选中了护栏开臂** ⇒
+#: ① 页面上的数字静默换成了**另一种配置**的运行（护栏开 = 多一次审查与修订）；
+#: ② 那两臂的 **traces 没有入库**，而页面要渲染 trace ⇒
+#:   干净克隆里重生成的页面比提交的那份**少 429 行**，"本页由存档生成"当场变成假话。
+#: ⇒ 钉住名字（docs/06 的证据索引也是按这些名字写的），找不到就**大声降级**。
+PUBLISHED = {
+    "baseline": "baseline-20260925-085629",
+    "multi": "multi-20260925-131953",
+}
+
+
+def published(kind: str) -> Path | None:
+    """取钉住的那次运行；不在场时返回 None（调用方负责降级并说明）。"""
+    p = EVAL_DIR / PUBLISHED[kind] / "results.json"
+    return p if p.exists() else None
+
+
 def latest(pattern: str) -> Path | None:
     """挑"最完整的那一次运行"。
 
@@ -91,6 +112,10 @@ def latest(pattern: str) -> Path | None:
         except Exception:  # noqa: BLE001
             continue
         if str(data.get("mode") or "").strip() == "replay":
+            continue
+        # ⚠️ 也跳过**开了护栏**的运行（M2 的实验臂）：那是**另一种配置** ——
+        #    拿它当"multi 的正式结果"会静默换掉交付页描述的那次运行（实测发生过）。
+        if any((a.get("guard") or {}).get("enabled") for a in data.get("attempts", [])):
             continue
         cand = (n, f.parent.name, f)
         if best is None or cand[:2] > best[:2]:
@@ -268,8 +293,13 @@ def trace_html(step: dict) -> str:
 
 
 def build() -> str:
-    base_p = latest("baseline-*/results.json")
-    multi_p = latest("multi-*/results.json")
+    base_p = published("baseline") or latest("baseline-*/results.json")
+    multi_p = published("multi") or latest("multi-*/results.json")
+    if base_p is not None and multi_p is not None:
+        for kind, chosen in (("baseline", base_p), ("multi", multi_p)):
+            if chosen.parent.name != PUBLISHED[kind]:
+                print(f"  ⚠️ {kind}：钉住的 {PUBLISHED[kind]} 不在场，降级取“最新”的 {chosen.parent.name}"
+                      "（页面描述的是哪一次运行会随之改变 —— 这一点会写进页面）")
     if base_p is None:
         raise SystemExit("找不到 baseline 的 results.json")
     # ⚠️ 第二版模板无条件引用 multi 的字段，所以 multi 缺失时**在这里就报清楚**，
