@@ -33,13 +33,33 @@ PRICE_OUT = 4.0
 
 
 def main() -> int:
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    only_last = "--all" not in sys.argv
+    path = Path(args[0]) if args else None
     if path is None or not path.exists():
-        print("用法：python scripts/cost_breakdown.py <recordings.ndjson>")
+        print("用法：python scripts/cost_breakdown.py <recordings.ndjson> [--all]")
+        print("  默认只分析**最近一次运行**（录制文件是追加的，可能含多次）")
         return 2
 
+    # ⚠️ 录制文件是**追加**写入的（`Recorder` 用 mode="a"），
+    #    所以一个文件里可能累积了**好几次运行**。
+    #    直接按整个文件统计，会把两三次运行混在一起 —— 我就这么错过一次
+    #    （harness-log #33：拿 33 次与「33+24」次比，得出假的「输出 +77%」）。
+    #
+    #    一次运行的边界很好认：**每次诊断只有 1 条 `coordinator` 调用**，
+    #    所以按 coordinator 切段，取最后一段就是最近一次运行。
+    raw = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    n_runs = sum(1 for o in raw if o.get("tag") == "coordinator") or 1
+    if only_last and n_runs > 1:
+        # ⚠️ 一次运行的**结尾**是它自己的 `coordinator` 调用（那是最后一个环节）。
+        #    所以第 k 次运行 = 「上一个 coordinator 之后」.. 「本次 coordinator」（含）。
+        #    第一版写成"从最后一个 coordinator 往后切"，那只切到 coordinator 自己 —— 又错一次。
+        idx = [i for i, o in enumerate(raw) if o.get("tag") == "coordinator"]
+        start = idx[-2] + 1 if len(idx) >= 2 else 0
+        raw = raw[start: idx[-1] + 1]
+
     rows = []
-    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+    for i, o in enumerate(raw):
         if not line.strip():
             continue
         o = json.loads(line)
@@ -73,6 +93,11 @@ def main() -> int:
     print("=" * 92)
     print(f"成本分解：{path.name}　{len(rows)} 次调用")
     print("=" * 92)
+    if n_runs > 1:
+        scope = "整文件（含多次运行）" if not only_last else f"最近一次运行（文件里共 {n_runs} 次）"
+        print(f"  ⚠️ 本文件累积了 {n_runs} 次运行，当前统计范围：{scope}")
+        print("     （录制是**追加**写入 —— 按整文件统计会把多次运行混在一起，见 #33）")
+        print()
     print(f"  输入：命中 {tot_hit:,} tok　未命中 {tot_miss:,} tok　"
           f"（命中率 {tot_hit / max(tot_prompt, 1):.1%}）")
     print(f"  输出：{tot_out:,} tok")
