@@ -1119,5 +1119,48 @@
         ]
       }
     ]
+  },
+  "keyword_inflection": {
+    "harness_log": [
+      "#48"
+    ],
+    "why": "#48: the keyword matcher compared plain substrings, so F4's criterion keyword 'retry' could not match 'retries' -- 'retries' neither contains 'retry' (it is 'retri'+'es') nor starts with it. Measured consequence: an answer that NAMED THE EXACT PARAMETER (W_INVENTORY_DOWNSTREAM_RETRIES) and described the amplification was scored as 'never mentioned retries'. It hit both sides (one multi round, one baseline round), and the baseline round's text WAS the declared answer. This is the fifth occurrence of the 'keywords cannot keep up with real language' family (#16/#21/#28), and the first one with a precise mechanism: English inflection. The fix normalises English word forms on BOTH sides (keyword and text), keeps substring matching for Chinese, and the dismissal logic is untouched -- a widening fix must not resurrect the old false positives.",
+    "tests": [
+      "tests/test_eval.py",
+      "tests/test_deliverable.py"
+    ],
+    "mutations": [
+      {
+        "id": "kw1-drop-the-ies-normalisation",
+        "desc": "Remove the y->ie plural rule, so 'retry' stops matching 'retries' and an answer naming the exact configuration parameter is once again judged as never mentioning retries.",
+        "file": "eval/scenarios.py",
+        "find": "    if len(w) > 4 and w.endswith(\"ies\"):\n        return w[:-3] + \"y\"",
+        "replace": "    if False:\n        return w[:-3] + \"y\"",
+        "expect_red": [
+          "tests/test_eval.py::test_keyword_matching_survives_english_inflection",
+          "tests/test_eval.py::test_keyword_matching_unit_cases_for_inflection_and_negation"
+        ]
+      },
+      {
+        "id": "kw2-widen-matching-past-the-negation-check",
+        "desc": "Make the assertion check ignore dismissal markers, so 'X is NOT the root cause' counts as asserting X again -- the exact mechanism behind the two false-positive 100% results (#16/#21).",
+        "file": "eval/scenarios.py",
+        "find": "        if any(m in clause for m in DISMISSAL_MARKERS):\n            continue",
+        "replace": "        if False:\n            continue",
+        "expect_red": [
+          "tests/test_eval.py::test_a_dismissed_retry_claim_is_still_not_counted_as_asserted"
+        ]
+      },
+      {
+        "id": "kw3-hide-the-rescored-caliber",
+        "desc": "Stop re-scoring the archive against the current criteria, so the page shows only the stored (known-defective) verdict and the corrected number silently disappears.",
+        "file": "scripts/make_demo.py",
+        "find": "    try:\n        from eval.scenarios import SCENARIOS, Cause, keyword_verdict",
+        "replace": "    if True:\n        return None\n    try:\n        from eval.scenarios import SCENARIOS, Cause, keyword_verdict",
+        "expect_red": [
+          "tests/test_deliverable.py::test_the_demo_page_reports_both_scoring_calibers"
+        ]
+      }
+    ]
   }
 }

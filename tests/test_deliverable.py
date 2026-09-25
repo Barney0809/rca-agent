@@ -260,6 +260,36 @@ def test_demo_seal_table_ignores_other_tables_in_the_log(fake_root: Path) -> Non
 # --------------------------------------------------------------------------- #
 # 四、页面与文档必须对得上（"由存档生成"这句主张的守卫）
 # --------------------------------------------------------------------------- #
+def test_the_demo_page_reports_both_scoring_calibers() -> None:
+    """#48：页面必须**同时**给出「存档判定」与「按当前判据重算」的准确率。
+
+    为什么值得锁住：存档里的 `correct` 是**当时那版判据**给的，而判据后来修过
+    （关键词匹配漏了英文词形）。只显示一个都会误导：
+
+      · 只给存档值 → 拿一个**已知有缺陷**的判定当结论；
+      · 只给重算值 → 抹掉"存档当时是什么样"，也就丢掉了可追溯性。
+
+    这条同时把两个具体数字钉住：那份存档当时是 19/21，按今天的判据是 20/21。
+    """
+    import json
+
+    from scripts import make_demo
+
+    p = ROOT / "runs" / "_eval" / "multi-20260925-131953" / "results.json"
+    if not p.exists():
+        pytest.skip("本机没有那份存档（runs/ 被 gitignore）")
+    data = json.loads(p.read_text(encoding="utf-8"))
+
+    stored = sum(1 for a in data["attempts"] if a["correct"])
+    now = make_demo.rescore_acc(data)
+
+    assert stored == 19, f"存档里的判定数变了：{stored}（这份存档是证据，不该被改写）"
+    assert now is not None, "重算返回 None —— 那两个口径就只剩一个了"
+    assert round(now * len(data["attempts"])) == 20, (
+        f"按当前判据应当是 20/21，实际 {now * len(data['attempts']):.0f}/21"
+    )
+
+
 def test_demo_seal_table_matches_the_harness_log() -> None:
     """页面上的"封堵清单（N 条）"必须等于 harness-log **总览表**的实际条数，
     而且**不许有重复编号**。

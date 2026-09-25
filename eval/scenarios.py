@@ -97,6 +97,61 @@ DISMISSAL_MARKERS: tuple[str, ...] = (
 
 _CLAUSE_SPLIT = re.compile(r"[。！？；;，,\n]")
 
+# 英文/数字的"词"：刻意**按 `_` 也切开** —— 这样 `w_inventory_downstream_retries`
+# 会被切成 `w / inventory / downstream / retries`，便于逐词比较。
+_ASCII_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _stem_en(word: str) -> str:
+    """英文词形归一（**极简**，只覆盖本项目真遇到的那几种变化）。
+
+    ⚠️ 为什么需要它（#48 的**第二版**修正）：第一版我用"词首前缀"去解决
+    `retry` 匹配不上 `retries` —— **那个想法是错的**：`retries` 并不以 `retry` 开头
+    （它是 `retri` + `es`，即 y→ie 变形）。实测确认 `_kw_hit(clause, "retry")` 仍是 False。
+    真正的机制是**词形变化**，不是前缀。
+
+    规则（对关键词与文本**用同一套**归一 ⇒ "一致性"比"语言学正确"更重要）：
+        retries → retry（y→ie 复数）　leaks → leak（加 s）　leaked → leak（-ed）
+    归一后按"相等或前缀"比较，从而覆盖 retrying / leaking 这类。
+    """
+    w = word.lower()
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 4 and w.endswith("ed"):
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s"):
+        return w[:-1]
+    return w
+
+
+def _kw_hit(haystack_lower: str, kw: str) -> bool:
+    """关键词是否命中 —— 对英文做**词形归一**（外加词首前缀），对中文用「子串」。
+
+    ⚠️ 为什么不是简单的子串（这是 harness-log #48 实测出来的）：
+
+        F4 的判据里有 `retry`，而一个**点名了参数名**的答案写的是
+        `W_INVENTORY_DOWNSTREAM_RETRIES`。`retries` **既不包含** `retry`
+        这个子串、**也不以它开头**（`retri` + `es`），于是那个**语义完全正确**的答案
+        被判成"从没提过重试" —— 实测两例，其中 `flash baseline @40` 第 2 轮
+        写的就是标准答案本身。
+
+        同一类风险不止一处：F6 的 `leak` 遇上 `leaks/leaked`、`重试` 遇上 `重试次数`。
+
+    ⇒ 规则（对**所有场景统一**，不是给 F4 开小灶）：
+        · 纯 ASCII：词形归一后相等、或"某个词以它开头"、或仍是子串（覆盖 `risk_latency_ms`）；
+        · 非 ASCII（中文）：仍是子串（中文没有词边界，`重试` 命中 `重试次数`）。
+    """
+    k = kw.lower()
+    if k in haystack_lower:
+        return True
+    if not k.isascii():
+        return False
+    ks = _stem_en(k)
+    return any(
+        tok.startswith(k) or _stem_en(tok) == ks
+        for tok in _ASCII_TOKEN.findall(haystack_lower)
+    )
+
 
 def _group_asserted(
     text: str, group: tuple[str, ...], *, dismissal_aware: bool = True
@@ -110,13 +165,13 @@ def _group_asserted(
     """
     if not dismissal_aware:
         low = text.lower()
-        return any(kw.lower() in low for kw in group)
+        return any(_kw_hit(low, kw) for kw in group)
 
     for clause in _CLAUSE_SPLIT.split(text):
         if not clause.strip():
             continue
         low_clause = clause.lower()
-        if not any(kw.lower() in low_clause for kw in group):
+        if not any(_kw_hit(low_clause, kw) for kw in group):
             continue
         if any(m in clause for m in DISMISSAL_MARKERS):
             continue
@@ -185,7 +240,7 @@ class ScenarioScore:
         """
         if not dismissal_aware:
             low = text.lower()
-            hits = [any(kw.lower() in low for kw in group) for group in self.keyword_groups]
+            hits = [any(_kw_hit(low, kw) for kw in group) for group in self.keyword_groups]
             return all(hits), hits
 
         hits = _asserted_flags(text, self.keyword_groups)
@@ -205,7 +260,7 @@ class ScenarioScore:
         dismissed = [
             "/".join(group)
             for group, hit in zip(self.keyword_groups, hits)
-            if not hit and any(kw.lower() in text.lower() for kw in group)
+            if not hit and any(_kw_hit(text.lower(), kw) for kw in group)
         ]
         if dismissed:
             return (
@@ -406,7 +461,7 @@ def keyword_verdict(text: str, cause: Cause) -> str:
     #    一句话：**判据是合取，就不能用析取去判断"它提没提过"。**
     low = text.lower()
     present = [
-        any(kw.lower() in low for kw in group) for group in cause.keyword_groups
+        any(_kw_hit(low, kw) for kw in group) for group in cause.keyword_groups
     ]
     return "dismissed" if all(present) else "absent"
 

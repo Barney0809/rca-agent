@@ -39,8 +39,11 @@ EVAL_DIR = ROOT / "runs" / "_eval"
 OUT = ROOT / "demo" / "rca-demo.html"
 
 # 本脚本是**直接执行**的（不经 pytest，所以拿不到 pyproject 里的 pythonpath），
-# 而它现在需要真实计价模型 —— 按仓库里其它脚本的写法自己挂 src。
+# 而它现在需要两样东西 —— 按仓库里其它脚本的写法自己挂路径：
+#   · `src`  → 真实计价模型（is_peak_hour）
+#   · 仓库根 → `eval.scenarios` 的**当前判据**（页面要按当前判据重算准确率，见 #48）
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 from rca.llm.provider import is_peak_hour  # noqa: E402
 
@@ -124,14 +127,56 @@ def tier_of(data: dict) -> tuple[str, str]:
     return "未记录", "无开始时刻，无法重算"
 
 
+def rescore_acc(data: dict) -> float | None:
+    """按**当前判据**重算准确率（只读存档里的答案文本，不花一分钱）。
+
+    ⚠️ 为什么页面上要同时给两个数（#48 之后加的）：
+
+        存档里的 `correct` 是**当时那版判据**给出的结论；而判据本身后来修过
+        （关键词匹配漏了英文词形：`retry` 匹配不上 `retries`）。
+        · 只显示存档值 → 拿一个**已知有缺陷**的判定当结论；
+        · 只显示重算值 → 抹掉了"存档当时是什么样"，也就丢掉了可追溯性。
+
+        ⇒ 两个都给，并注明差异是从哪来的。这也是"本页由存档生成"的一部分：
+          重算所用的是**同一份存档文本** + 当前的判据代码。
+
+    无效场景（F2）与未知场景按原样保留，不参与重算。
+    """
+    try:
+        from eval.scenarios import SCENARIOS, Cause, keyword_verdict
+    except Exception:  # noqa: BLE001 —— 取不到判据就不显示这一栏，而不是编一个数
+        return None
+
+    at = [a for a in data["attempts"]
+          if not (SCENARIOS.get(a["fault_id"])
+                  and SCENARIOS[a["fault_id"]].invalidated_reason)]
+    if not at:
+        return None
+    ok = 0
+    for a in at:
+        sc = SCENARIOS.get(a["fault_id"])
+        if sc is None:
+            ok += bool(a["correct"])
+            continue
+        v = keyword_verdict(a.get("root_cause") or "",
+                            Cause(a["fault_id"], sc.keyword_groups))
+        ok += (v == "asserted")
+    return ok / len(at)
+
+
 def totals(data: dict) -> dict:
     at = data["attempts"]
     n = len(at)
     faults = sorted({a["fault_id"] for a in at})
     tier, tier_src = tier_of(data)
+    acc_now = rescore_acc(data)
     return {
         "n": n,
         "acc": sum(1 for a in at if a["correct"]) / n,
+        # 按**当前判据**重算出来的准确率（可能与存档值不同，见 #48）
+        "acc_now": acc_now,
+        "acc_changed": acc_now is not None
+        and abs(acc_now - sum(1 for a in at if a["correct"]) / n) > 1e-9,
         "steps": sum(a["steps"] for a in at) / n,
         "cost": sum(a["cost_yuan"] for a in at) / n,
         "conv": sum(1 for a in at if a["finished"]) / n,
@@ -238,7 +283,12 @@ def build() -> str:
 
     # ★ 结论的**措辞也由数字推出**（#37 的推广）：不能再手打"准确率没有任何优势" ——
     #   一旦 multi 补齐到全部场景、准确率变了，手打的句子就会当场变成假话。
-    acc_delta_pp = (m["acc"] - b["acc"]) * 100
+    #
+    #   ⚠️ 用**当前判据**的数字下结论（`acc_now`），存档值只作为对照显示：
+    #      拿一个"已知有缺陷的判定"当结论，等于把 #48 修过的错又背回去。
+    b_eff = b["acc_now"] if b.get("acc_now") is not None else b["acc"]
+    m_eff = m["acc_now"] if m.get("acc_now") is not None else m["acc"]
+    acc_delta_pp = (m_eff - b_eff) * 100
     if abs(acc_delta_pp) < 0.05:
         headline = "多 Agent 没有可测的价值增量。"
         verdict_word = "准确率<strong>没有变化</strong>"
@@ -248,7 +298,31 @@ def build() -> str:
     else:
         headline = "多 Agent <strong>更准</strong>，但要为此付出高得多的成本。"
         verdict_word = f"准确率<strong>高了 {acc_delta_pp:.1f} 个百分点</strong>"
-    print(f"  结论措辞：{headline}／{verdict_word}")
+    print(f"  结论措辞（按当前判据）：{headline}／{verdict_word}")
+
+    # ★ 两个口径：**存档当时的判定** vs **按当前判据重算**（#48）
+    #
+    #   ⚠️ 为什么两个都要给：只给存档值 = 拿一个已知有缺陷的判定当结论；
+    #      只给重算值 = 抹掉"存档当时是什么样"。重算只用同一份存档文本 + 当前判据代码，
+    #      零成本、可复算 —— 这是"本页由存档生成"的一部分。
+    acc_shown = f"{m_eff * 100:.1f}%"
+    if m["acc_now"] is not None and m["acc_changed"]:
+        acc_shown = (f"{m_eff * 100:.1f}%<span class='dim'>（按当前判据）</span> / "
+                     f"{m['acc'] * 100:.1f}%<span class='dim'>（存档判定）</span>")
+    acc_two_calibers = ""
+    if m["acc_changed"] or b["acc_changed"]:
+        b_now = f" → 按当前判据 <strong>{b['acc_now'] * 100:.1f}%</strong>" if b.get("acc_now") is not None else ""
+        m_now = f" → 按当前判据 <strong>{m['acc_now'] * 100:.1f}%</strong>" if m.get("acc_now") is not None else ""
+        acc_two_calibers = (
+            "<p class='dim'>⚠️ <strong>两个口径都给</strong>：存档里的判定是"
+            "<strong>当时那版判据</strong>给出的；判据后来修过一次"
+            "（关键词匹配漏了英文词形：<code>retry</code> 匹配不上 <code>retries</code>，"
+            "见 harness-log #48），所以同一份存档按今天的判据重算会不一样。"
+            f"baseline 存档 {b['acc'] * 100:.1f}%{b_now}；"
+            f"multi 存档 {m['acc'] * 100:.1f}%{m_now}。"
+            "上面的结论用的是<strong>按当前判据</strong>的那个数；"
+            "重算只用同一份存档文本 + 当前判据代码，不花一分钱、可自行复跑。</p>"
+        )
 
     # 两侧样本是否对等（决定"能不能直接比准确率"）
     same_sample = b["scen"] == m["scen"] and b["rounds"] == m["rounds"]
@@ -330,8 +404,9 @@ def build() -> str:
  <span class="num">{b['acc'] * 100:.1f}%</span> 准确率；
  三专员 + 交叉质证 + 裁决用 <span class="num">¥{m['cost']:.4f}</span>/次
  （<strong>{m['cost']/b['cost']:.1f}×</strong>）拿到
- <span class="num">{m['acc'] * 100:.1f}%</span> —— {verdict_word}。
+ <span class="num">{acc_shown}</span> —— {verdict_word}。
 </blockquote>
+{acc_two_calibers}
 <p class="dim">比这个负结果本身更重要的，是它<strong>是被测量出来的</strong>：
 一路上有七八次得到过相反的结论，每一次都是「尺子」坏了（见第四节）。</p>
 

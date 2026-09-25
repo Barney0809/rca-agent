@@ -1393,6 +1393,63 @@ def test_guessed_dates_are_not_counted_as_holidays():
 # --------------------------------------------------------------------------- #
 # P7 / #43：裁判审计脚本的两条不变量
 # --------------------------------------------------------------------------- #
+def test_keyword_matching_survives_english_inflection():
+    """#48：`retry` 必须能命中 `retries`，`leak` 能命中 `leaks`。
+
+    现场（D15 回顾时实测）：一段**点名了参数名**的答案 ——
+
+        配置变更放大了故障：05:45:32 inventory.W_INVENTORY_DOWNSTREAM_RETRIES 由 1 改为 5，
+        使 127 个失败订单产生 2153 次 payment 调用……把局部失败放大为请求风暴。
+
+    —— 那是**标准答案本身**，却因为在词形上不满足 `retry` 而被判成"从没提过重试"：
+    `retries` **既不包含** `retry`（是 `retri` + `es`）、**也不以它开头**。
+    实测它在 F4 这一格上把**两侧**各判错一次（multi 一轮、baseline 一轮）。
+    """
+    from eval.scenarios import SCENARIOS, Cause, keyword_verdict
+
+    cause = Cause("F4", SCENARIOS["F4"].keyword_groups)
+    answer = (
+        "配置变更放大了故障：05:45:32 inventory.W_INVENTORY_DOWNSTREAM_RETRIES 由 1 改为 5，"
+        "使 127 个失败订单产生 2153 次 payment 调用，把局部失败放大为请求风暴。"
+    )
+
+    assert keyword_verdict(answer, cause) == "asserted", (
+        "点名了参数名的正确答案又被判成没提过重试 —— 词形归一出问题了"
+    )
+
+
+def test_keyword_matching_unit_cases_for_inflection_and_negation():
+    """配套的单元级对照：变形要认，**否掉的不许认**，没提的仍不认。"""
+    from eval.scenarios import _kw_hit
+
+    # 英文词形
+    assert _kw_hit("service retries downstream calls", "retry") is True
+    assert _kw_hit("the client is retrying now", "retry") is True
+    assert _kw_hit("order leaks memory", "leak") is True
+    assert _kw_hit("it leaked 2mb per request", "leak") is True
+    # 中文仍是子串（没有词边界）
+    assert _kw_hit("重试次数从 1 改成 5", "重试") is True
+    # 反向对照：完全没提就不许认（否则就是"什么都能命中"）
+    assert _kw_hit("payment 返回 502，仅此而已", "retry") is False
+    assert _kw_hit("延迟升高", "库存") is False
+
+
+def test_a_dismissed_retry_claim_is_still_not_counted_as_asserted():
+    """★ 加词形归一**不能**把"否掉"也一起认了。
+
+    这是最容易在修匹配器时被顺手放大的方向：只要把"命中"放宽，
+    就可能让"重试不是根因"这种句子重新变成"主张了重试"（#16/#21 的老病）。
+    """
+    from eval.scenarios import SCENARIOS, Cause, keyword_verdict
+
+    cause = Cause("F4", SCENARIOS["F4"].keyword_groups)
+    denied = "inventory 的下游重试次数变更**不是根因**，它只是放大了既有故障。"
+
+    assert keyword_verdict(denied, cause) != "asserted", (
+        "把否掉的表述算成主张 —— 这正是 #16/#21 两次假阳性的机制"
+    )
+
+
 def test_small_sample_warning_fires_for_three_rounds():
     """#46：单场景样本太小时，**报告必须自己说出来**。
 
