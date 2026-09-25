@@ -166,27 +166,45 @@ def test_fork_gives_independent_counters(empty_ctx: RunContext):
 
 
 def test_baseline_module_is_frozen():
-    """元测试：`baseline.py` 不允许被改动。
+    """元测试：`baseline.py` 不允许被**随意**改动。
 
-    D5 的数字（准确率 61.1%）已经写进文档，是对照实验的分母。
-    如果有人为了"统一代码风格"把 baseline 重构成通用类，
-    它的行为可能变化，**D5 的数字就失效了**。
+    它是 D5 数字的分母。若有人为了"统一代码风格"重构它，
+    它的行为可能变化，**docs/05 的数字就失效了**。
 
     这条用例用内容指纹守住它：文件一旦改动就会变红，
     迫使改动者显式更新指纹**并重新跑一遍 baseline**。
+
+    ── 指纹变更历史（每次都必须在这里留下理由）──
+
+    `c5cad8da8af3d838` → `f2a1f143d5bb88fe`（2026-09-25）
+
+        原因：**改任务定义**。原来的任务只问"根因"（单数、一句话），
+        导致多故障场景（F8）里"只答出一个"被判不完整 ——
+        那是拿一个它没被交付的任务去考它（`docs/06` §四）。
+
+        改成了"列出这段时间内**所有**异常现象及其根本原因"：
+          · `SYSTEM_PROMPT` 新增原则 5（可能同时存在多件事）+ 输出契约
+            的 `root_cause`（字符串）改成 `root_causes`（列表）
+          · `TASK_PROMPT` 明确要求分别列出、只报一个算不完整
+          · 新增 `_parse_root_causes()`：**新旧两种格式都认** ——
+            回放存档里存的是旧格式，只认新格式会让历史录像全部解析失败，
+            那会让"改了任务"看起来像"模型变差了"
+
+        ⇒ **docs/05 的全部数字随之作废，已重跑并更新。**
     """
     import hashlib
 
     path = Path(__file__).resolve().parent.parent / "src" / "rca" / "agents" / "baseline.py"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    expected = "c5cad8da8af3d838"
+    expected = "f2a1f143d5bb88fe"
 
     assert digest == expected, (
         f"baseline.py 被改动了！\n"
         f"  期望指纹 {expected}\n"
         f"  实际指纹 {digest}\n"
         f"baseline 是对照实验的分母，改动它会让 docs/05 的数字失效。\n"
-        f"若确实需要改，请：① 更新本用例里的指纹；② 重新跑一遍 baseline 并更新 docs/05。"
+        f"若确实需要改，请：① 更新本用例里的指纹**并在此写清理由**；"
+        f"② 重新跑一遍 baseline 并更新 docs/05。"
     )
 
 
@@ -411,4 +429,70 @@ def test_the_chat_signature_check_actually_found_call_sites() -> None:
     assert len(sites) >= 4, f"只扫到 {len(sites)} 个 chat() 调用点：{where}"
     assert any(p.name == "coordinator.py" for p, _ in sites), (
         "没扫到 coordinator.py 里的 chat() 调用点，路径规则可能错了"
+    )
+
+
+# ================================================================
+# 任务定义改成"列出所有根因"之后，结论解析必须**新旧格式都认**
+# ================================================================
+#
+# 2026-09-25：任务从"定位根本原因"（单数）改成"列出所有异常及其根因"，
+# 输出契约从 `root_cause`（字符串）改成 `root_causes`（列表）。
+#
+# ⚠️ 为什么解析必须容错两种格式：
+#   1. **回放（replay）存档里存的是旧格式** —— 只认新格式会让历史录像
+#      全部解析失败，变成一堆 `parse_ok=False`。
+#      那会让"改了任务"看起来像"模型变差了" —— 最容易误判的一种情况。
+#   2. 模型本身也经常"记得旧格式"。
+#
+# 这组用例守的是：**改了契约之后，旧数据还认不认。**
+
+
+def test_parse_root_causes_accepts_both_contracts():
+    from rca.agents.baseline import _parse_root_causes
+
+    assert _parse_root_causes({"root_causes": ["a", "b"]}) == ["a", "b"]
+    # 旧契约：单数（回放存档里的形状）
+    assert _parse_root_causes({"root_cause": "单个原因"}) == ["单个原因"]
+    # 两种都在时以新契约优先
+    assert _parse_root_causes({"root_causes": ["新"], "root_cause": "旧"}) == ["新"]
+
+
+def test_parse_root_causes_tolerates_a_string_where_a_list_was_asked_for():
+    """模型没写数组、写了一句话时也要能用。
+
+    这不是假想：契约说 `root_causes` 是列表，模型经常给一句用分号连起来的话。
+    直接 `str(...)` 会把它变成 `"['a', 'b']"` 这种带方括号的怪物字符串，
+    评分时匹配不到任何关键词 —— 又一个"看起来跑通了、其实数据是坏的"。
+    """
+    from rca.agents.baseline import _parse_root_causes
+
+    assert _parse_root_causes({"root_causes": "原因甲；原因乙"}) == ["原因甲", "原因乙"]
+    # 切不开就整条当一条，绝不能丢
+    assert _parse_root_causes({"root_causes": "就一个原因"}) == ["就一个原因"]
+
+
+def test_parse_root_causes_handles_empty_and_missing():
+    from rca.agents.baseline import _parse_root_causes
+
+    assert _parse_root_causes({}) == []
+    assert _parse_root_causes({"root_causes": []}) == []
+    assert _parse_root_causes({"root_cause": "   "}) == []
+    # 空串元素要被丢掉，不能留下空条目
+    assert _parse_root_causes({"root_causes": ["  a  ", ""]}) == ["a"]
+
+
+def test_baseline_joins_the_list_into_the_legacy_field():
+    """`root_cause`（拼起来的文本）必须仍然被填上。
+
+    评分与存档一直用这个字段；它一旦空了，
+    所有场景都会因为"文本里没有关键词"而判错 —— 而且**看不出是为什么**。
+    """
+    import inspect
+
+    from rca.agents import baseline as mod
+
+    src = inspect.getsource(mod)
+    assert '"；".join(diag.root_causes)' in src, (
+        "Diagnosis.root_cause 必须由 root_causes 拼出来（评分/存档依赖它）"
     )

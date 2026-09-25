@@ -62,18 +62,29 @@ SYSTEM_PROMPT = """\
    反过来，根因也可能根本不是一次配置变更。
 4. **注意耗时断层出现在哪一层。** 如果上游慢而下游正常，问题在上游；
    如果逐层都慢，问题在最下游。
-5. 证据不足时，宁可降低置信度，也不要猜。
+5. ★ **同一段时间里可能同时存在多件互不相干的事。**
+   找到第一个异常**不等于**任务完成 —— 它只是完成了排查的一部分。
+   交卷前必须主动回答一遍：**"还有没有别的异常，是我改了它也不会消失的？"**
+   两个独立问题必须分别列出；**只报一个就是不完整的结论。**
+6. 证据不足时，宁可降低置信度，也不要猜。
 
 最后一次回复必须是**纯 JSON**（不要包在代码块里，不要有其他文字）：
 {
-  "root_cause": "一句话说清根本原因",
-  "evidence": ["支撑该结论的具体证据", "..."],
+  "root_causes": ["一句话说清一个根本原因", "如果存在第二个独立原因，写在这里"],
+  "evidence": ["支撑上述结论的具体证据", "..."],
   "confidence": 0.0
 }
+
+⚠️ `root_causes` 是一个**列表**，不是一句话。
+  只有一个原因时就写一条；**有多条独立原因时必须全部列出**（见原则 5）。
 """
 
 TASK_PROMPT = """\
-被诊断系统在刚才一段时间内出现了故障。请用工具收集证据，定位根本原因。
+被诊断系统在刚才一段时间内出现了故障。
+请用工具收集证据，找出这段时间内**所有**异常现象及其根本原因。
+
+⚠️ 这段时间里**可能同时有好几个互不相干的问题**，请把它们**分别列出**；
+   只报出一个就交卷会被判为不完整。
 
 系统由三个服务组成，调用链为：order → inventory → payment → 外部风控。
 可用工具：query_logs / query_metrics / get_changes。
@@ -90,6 +101,10 @@ class Diagnosis:
     """一次诊断的完整结果 —— 三个验收数字都在这里。"""
 
     root_cause: str = ""
+    # ★ 2026-09-25 起，任务改成"列出**所有**异常及其根因"，
+    #   所以结论是一个**列表**。`root_cause` 保留为"列表拼起来的文本" ——
+    #   评分与存档一直用它，改名会让所有历史数据对不上。
+    root_causes: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
     confidence: float = 0.0
     parse_ok: bool = False          # 模型是否给出了合法的 JSON 结论
@@ -109,6 +124,7 @@ class Diagnosis:
     def to_dict(self) -> dict:
         return {
             "root_cause": self.root_cause,
+            "root_causes": self.root_causes,
             "evidence": self.evidence,
             "confidence": self.confidence,
             "parse_ok": self.parse_ok,
@@ -128,6 +144,38 @@ class Diagnosis:
 # ================================================================
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
+
+
+def _parse_root_causes(parsed: dict) -> list[str]:
+    """从模型给出的 JSON 里取出"根本原因"列表。
+
+    ⚠️ 必须**两种格式都认**：
+
+      `root_causes: [...]` —— 2026-09-25 之后的任务契约（可以列出多个原因）
+      `root_cause: "..."`  —— 旧契约（单数）
+
+    为什么两种都认：模型经常"记得旧格式"，而且**回放（replay）存档里存的是旧格式**。
+    只认新格式会让所有历史录像解析失败，变成一堆 `parse_ok=False` ——
+    那会让"改了任务"看起来像"模型变差了"。
+
+    字符串形式的 `root_causes`（模型没写数组而是写了一句话）也要容忍：
+    按分号/换行切成多条，切不开就当成一条。
+    """
+    raw = parsed.get("root_causes")
+    if raw is None:
+        raw = parsed.get("root_cause")
+
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        parts = [p.strip() for p in re.split(r"[；;\n]", text) if p.strip()]
+        return parts or [text]
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return [str(raw).strip()]
 
 
 def extract_json(text: str) -> dict | None:
@@ -206,7 +254,10 @@ class BaselineAgent:
             diag.raw_text = result.text
             parsed = extract_json(result.text)
             if parsed:
-                diag.root_cause = str(parsed.get("root_cause", "")).strip()
+                diag.root_causes = _parse_root_causes(parsed)
+                # 评分与存档用的是拼起来的文本 —— 一个字段名都不改，
+                # 否则历史数据全部对不上（详见 Diagnosis 里的注释）
+                diag.root_cause = "；".join(diag.root_causes)
                 ev = parsed.get("evidence") or []
                 diag.evidence = [str(e) for e in ev] if isinstance(ev, list) else [str(ev)]
                 try:

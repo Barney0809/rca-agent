@@ -276,10 +276,22 @@ COORDINATOR_PROMPT = """\
     但它未必是根因。要问：**如果它是根因，那么其他同事观察到的现象能不能被解释？**
     如果解释不了，那它就只是**被放大的脆弱点**，而不是触发者。
 
+★ 还有一类情况同样重要（2026-09-25 新增）：
+
+    **同一段时间里可能同时存在多件互不相干的事。**
+    如果你把某个现象降级成"伴随现象 / 被放大的脆弱点"，
+    请先自问：**它是不是一个独立的、需要单独处置的问题？**
+    是的话，它必须作为**单独一条**列进 `root_causes`，
+    而不是被"驳回"掉 —— **驳回的作用是否掉错误的因果解释，不是否掉另一个真实存在的问题。**
+
+    判据：**去掉另一个原因，它会不会自己消失？**
+      会消失  → 它确实是伴随现象，可以只在 `rejected` 里说明
+      不会消失 → **它是一条独立原因，必须单独列出**
+
 最后一次回复必须是纯 JSON：
 {
-  "root_cause": "一句话讲清根本原因（要能解释所有被观察到的现象）",
-  "evidence_chain": ["支撑该结论的证据，注明来自哪一路"],
+  "root_causes": ["一条一个根本原因", "存在第二个独立原因就写第二条"],
+  "evidence_chain": ["支撑上述结论的证据，注明来自哪一路"],
   "confidence": 0.0,
   "accepted": "logs / metrics / change",
   "rejected": [
@@ -287,6 +299,9 @@ COORDINATOR_PROMPT = """\
   ],
   "dissent": ["如果有人在质证后仍坚持另一条结论，在这里如实记录"]
 }
+
+⚠️ `root_causes` 是**列表**。只有一个原因时写一条即可；
+  **有多条独立原因时必须全部列出，只列一个即为不完整。**
 """
 
 
@@ -295,6 +310,10 @@ class Verdict:
     """最终裁决。"""
 
     root_cause: str = ""
+    # ★ 2026-09-25 起任务改成"列出**所有**异常及其根因"，所以结论是列表。
+    #   `root_cause` 保留为"列表拼起来的文本"（评分与存档一直用它，
+    #   改名会让历史数据全部对不上）—— 与 baseline.Diagnosis 同一处理。
+    root_causes: list[str] = field(default_factory=list)
     evidence_chain: list[str] = field(default_factory=list)
     confidence: float = 0.0
     accepted: str = ""
@@ -308,6 +327,7 @@ class Verdict:
     def to_dict(self) -> dict:
         return {
             "root_cause": self.root_cause,
+            "root_causes": self.root_causes,
             "evidence_chain": self.evidence_chain,
             "confidence": round(self.confidence, 2),
             "accepted": self.accepted,
@@ -373,7 +393,12 @@ def adjudicate(
     v = Verdict(cost_yuan=result.cost_yuan, raw_text=result.text)
     parsed = extract_json(result.text)
     if parsed:
-        v.root_cause = str(parsed.get("root_cause", "")).strip()
+        # 与 baseline 用**同一个**解析函数：两种格式都认（新的列表 / 旧的单数），
+        # 并且容忍"该写数组却写了一句话"。理由见该函数的注释。
+        from .baseline import _parse_root_causes
+
+        v.root_causes = _parse_root_causes(parsed)
+        v.root_cause = "；".join(v.root_causes)
         ec = parsed.get("evidence_chain") or []
         v.evidence_chain = [str(i) for i in ec] if isinstance(ec, list) else [str(ec)]
         try:
