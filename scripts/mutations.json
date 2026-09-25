@@ -1677,6 +1677,69 @@
       }
     ]
   },
+  "guard_pre_action_gate": {
+    "harness_log": [
+      "#58"
+    ],
+    "why": "#58 (M4): until now the guard only JUDGED -- block was a sentence, not an action, so the tool call happened anyway. The gate runs before forwarding, which makes 'blocked' a fact about what happened rather than an opinion. The three mutations are the three ways that can be faked or broken: (a) report blocked but forward anyway (the flattering version that looks perfectly normal); (b) treat any second call to the same tool as a repeat, ignoring arguments, so a legitimate follow-up question is refused; (c) skip the policy check, so write-class tools bypass the deny-first policy point.",
+    "tests": [
+      "tests/test_guard_gate.py"
+    ],
+    "mutations": [
+      {
+        "id": "gate-a-blocked-call-still-forwarded",
+        "desc": "Keep reporting 'blocked' to the caller while forwarding the call to the upstream toolbox anyway -- the guard then only looks like it prevents things.",
+        "file": "src/rca/guard/proxy.py",
+        "find": "        if findings:",
+        "replace": "        if findings and False:",
+        "expect_red": [
+          "tests/test_guard_gate.py::test_repeat_calls_are_blocked_and_never_reach_the_upstream",
+          "tests/test_guard_gate.py::test_write_tools_go_through_the_policy_check"
+        ]
+      },
+      {
+        "id": "gate-b-repeat-ignores-the-arguments",
+        "desc": "Call it a repeat whenever the same TOOL is used again, ignoring the arguments, so a legitimate follow-up with different parameters gets refused.",
+        "file": "src/rca/guard/proxy.py",
+        "find": "        same = sum(1 for c in trace.calls\n                   if _signature(c.name, _args_of(c)) == _signature(name, args))",
+        "replace": "        same = sum(1 for c in trace.calls if c.name == name)",
+        "expect_red": [
+          "tests/test_guard_gate.py::test_different_arguments_are_not_treated_as_a_repeat"
+        ]
+      },
+      {
+        "id": "gate-c-policy-hook-skipped",
+        "desc": "Skip the policy check for write-class tools, so the deny-first policy point is bypassed by anything that goes through this face.",
+        "file": "src/rca/guard/proxy.py",
+        "find": "    if name in gate.write_tools and gate.policy_check is not None:",
+        "replace": "    if False:",
+        "expect_red": [
+          "tests/test_guard_gate.py::test_write_tools_go_through_the_policy_check"
+        ]
+      }
+    ]
+  },
+  "ci_workflow_guards": {
+    "harness_log": [
+      "#59"
+    ],
+    "why": "#59 (first real CI runs): the workflow itself was the bug three times, and only a runner could tell. The guard that exists now is 'the readiness probe must poll a path some service actually serves' -- because the pipeline polled /healthz for months-of-file-history while the services serve /health, and every container was healthy the whole time. This mutation re-enacts exactly that.",
+    "tests": [
+      "tests/test_ci_workflow.py"
+    ],
+    "mutations": [
+      {
+        "id": "ci-a-probe-polls-a-path-nobody-serves",
+        "desc": "Poll /healthz again where the services serve /health -- the real accident: containers all healthy, readiness waits until it times out.",
+        "file": ".github/workflows/ci.yml",
+        "find": "curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1",
+        "replace": "curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1",
+        "expect_red": [
+          "tests/test_ci_workflow.py::test_health_urls_in_the_workflow_are_really_served"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1690,7 +1753,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**315 passed / 1 skipped**",
+        "find": "**322 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1700,7 +1763,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**46 组 / 119 个变异体，全部 SEALED**",
+        "find": "**48 组 / 123 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1710,8 +1773,8 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**67 条**（其中 **56 条**由变异测试证明能变红，**11 条**",
-        "replace": "封堵清单：**99 条**（其中 **56 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**69 条**（其中 **58 条**由变异测试证明能变红，**11 条**",
+        "replace": "封堵清单：**99 条**（其中 **58 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
         ]

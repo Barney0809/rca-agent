@@ -30,6 +30,7 @@ MCP 流量只覆盖**行动面**（工具调用与返回）—— 它**看不到
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -59,6 +60,89 @@ class Submission:
 
 
 @dataclass
+class Gate:
+    """**事前闸门**（D21 / M4）：在"转发之前"判定 —— 这是"真的能拦"的落点。
+
+    M1–M3 的护栏只**判定**：`block` 是一句结论，动作照样发生。
+    M4 把它变成动作面的一道闸门：判为拦的调用**不转发给上游**，
+    并把结构化拒绝交给调用方（Agent 可以据此改道，而不是崩溃）。
+
+    三条闸门规则（全部**确定性**、不看标准答案）：
+
+      1. **打转**：同一「工具 + 参数」达到 `repeat_threshold` 次 ⇒ 拦。
+         （工具层原本只是**提醒**模型；这里升级为拦 —— 提醒被无视过一次。）
+      2. **次数预算**：累计工具调用超过 `max_tool_calls` ⇒ 拦（0 = 不限制）。
+      3. **写类工具走策略执行点**：`write_tools` 里点名 + 提供 `policy_check` 时，
+         由 `src/rca/policy/` 的 deny-first 决策说话 —— 护栏**不自己发明**一套授权，
+         这是"与策略点合流"，不是再造一个。
+
+    ⚠️ 关键不变量：**判为拦之后，上游一定不能被调用**。
+       "报了拦但照样转发"是这一类实现最容易出的错（而且看起来完全正常），
+       所以它有一条专门的用例 + 一个故意重演它的变异体。
+    """
+
+    max_tool_calls: int = 0
+    repeat_threshold: int = 3
+    write_tools: tuple[str, ...] = ()
+    #: 写类工具的授权判定：`(name, args) -> (allowed, reason)`。
+    #: 生产上接 `src/rca/policy/` 的策略执行点；测试里可以注入假的。
+    policy_check: Callable[[str, dict], tuple[bool, str]] | None = None
+
+
+def _signature(name: str, args: dict) -> str:
+    """工具 + 参数的稳定签名（排序后序列化，避免键序造成"看起来不同"）。"""
+    return f"{name}|{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+
+
+def pre_action_findings(trace: Trace, name: str, args: dict, gate: Gate) -> list[Finding]:
+    """转发**之前**的判定（返回非空 = 拦下这次调用）。"""
+    out: list[Finding] = []
+
+    if gate.max_tool_calls and len(trace.calls) >= gate.max_tool_calls:
+        out.append(Finding(
+            rule="tool_budget_exceeded",
+            severity="block",
+            subject=f"{len(trace.calls)}/{gate.max_tool_calls}",
+            detail="工具调用次数已超过本次预算 —— 继续调用不会带来新信息",
+        ))
+
+    if gate.repeat_threshold:
+        same = sum(1 for c in trace.calls
+                   if _signature(c.name, _args_of(c)) == _signature(name, args))
+        if same >= gate.repeat_threshold:
+            out.append(Finding(
+                rule="repeated_tool_call",
+                severity="block",
+                subject=name,
+                detail=(f"同一「工具 + 参数」已经调用过 {same} 次"
+                        f"（阈值 {gate.repeat_threshold}）—— 这是打转，不是深挖"),
+            ))
+
+    if name in gate.write_tools and gate.policy_check is not None:
+        allowed, reason = gate.policy_check(name, args)
+        if not allowed:
+            out.append(Finding(
+                rule="policy_denied",
+                severity="block",
+                subject=name,
+                detail=f"策略执行点拒绝了这个写类动作：{reason}",
+            ))
+
+    return out
+
+
+def _args_of(call: ToolCall) -> dict:
+    """把记录下来的 `args`（可能已经是字符串）还原成 dict，用于重放签名。"""
+    if isinstance(call.args, dict):
+        return call.args
+    try:
+        loaded = json.loads(call.args or "{}")
+        return loaded if isinstance(loaded, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+@dataclass
 class GuardedToolFace:
     """外部 Agent 能看到的那一面：工具 + 一个 `submit_conclusion`。
 
@@ -70,9 +154,15 @@ class GuardedToolFace:
     label: str = ""
     #: 工具名清单（交给对方去暴露；代理不关心它们怎么被描述）
     tool_names: Callable[[], list[str]] | None = None
+    #: 事前闸门（M4）。默认 `Gate()` = 只拦打转（阈值 3），不限制次数预算、不管写类。
+    gate: Gate = field(default_factory=Gate)
 
     trace: Trace = field(init=False)
     submissions: list[Submission] = field(default_factory=list, init=False)
+    #: 被拦下的调用次数（M4 的账，报告里要能看见"护栏真的拦了几次"）
+    blocked: int = field(default=0, init=False)
+    #: 最近一次被拦的原因（诊断用）
+    last_blocked: list[Finding] = field(default_factory=list, init=False)
     #: 单调递增的事件序号（**每个动作一个号**：一次工具调用+它的返回共用一个号，
     #: 每次交卷一个号）。见 `_next_step` 的说明。
     _step: int = field(default=0, init=False)
@@ -98,16 +188,40 @@ class GuardedToolFace:
         return []
 
     def call(self, name: str, args: dict | None = None) -> dict:
-        """转发一次工具调用，并把"问了什么 / 回了什么"记进事件流。
+        """先过**事前闸门**，通过才转发；并把"问了什么 / 回了什么"记进事件流。
 
-        ⚠️ **上游报错也要记进事件流**（`ok=False` + 错误原文）：
-           护栏判"这条主张有没有证据"靠的就是这串事件；
-           把失败悄悄吞成空字符串，会让"工具坏了"看起来像"工具说什么都没有" ——
-           那是 #26 的同族错误（空绿）。
+        ⚠️ 两条不能动摇的性质：
+          1. **判为拦就不转发** —— 上游工具箱**一次都不能被调用**（有用例专门钉住）；
+          2. **拦住也要留痕**：记下"它要调"和"被拦"，所以判定规则（M1）仍然看得到
+             这条路径上发生过什么 —— 拦掉的动作不该从证据里消失。
         """
         args = dict(args or {})
+        # ⚠️ 顺序不能反：**先判定、再记录**。先记录的话，这次调用自己就会被算进
+        #    "已经调过几次"里 ⇒ 阈值 1 时第一次调用就被拦（实测被用例抓住）。
+        findings = pre_action_findings(self.trace, name, args, self.gate)
         step = self._next_step()
-        self.trace.add(ToolCall(step=step, name=name, args=repr(args), role="external"))
+        # 参数存成**规范 JSON**（不是 repr）：重复调用的判定要能原样解析回来
+        self.trace.add(ToolCall(step=step, name=name,
+                                args=json.dumps(args, sort_keys=True, ensure_ascii=False),
+                                role="external"))
+
+        if findings:
+            detail = "；".join(f"{f.rule}：{f.detail}" for f in findings)
+            text = f"[护栏拦截] 这次调用没有被执行。{detail}"
+            self.trace.add(ToolResult(step=step, name=name, text=text, ok=False, role="external"))
+            self.blocked += 1
+            self.last_blocked = findings
+            return {
+                "ok": False,
+                "blocked": True,
+                "text": text,
+                "findings": [
+                    {"rule": f.rule, "severity": f.severity, "subject": f.subject,
+                     "detail": f.detail, "evidence": list(f.evidence)}
+                    for f in findings
+                ],
+            }
+
         try:
             result = self.toolbox.call(name, args)
             text = getattr(result, "text", None)
@@ -159,6 +273,7 @@ class GuardedToolFace:
         return {
             "label": self.label,
             "n_tool_calls": self.n_tool_calls,
+            "n_blocked": self.blocked,                 # ★ M4：真的拦了几次
             "submissions": [s.to_dict() for s in self.submissions],
             "final_verdict": self.final_verdict.verdict,
             "n_findings": len(self.final_verdict.findings),
