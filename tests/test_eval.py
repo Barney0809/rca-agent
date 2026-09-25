@@ -1013,3 +1013,55 @@ def test_judge_cost_is_not_invented_when_there_is_no_judge():
     from eval.runner import judge_detail
 
     assert judge_detail(_sc("F1"), "文本", None) == {}
+
+# ================================================================
+# P8：**标准答案本身也要被检查**
+# ================================================================
+#
+# 真实经历（D10 扩对抗样本时）：
+#
+#   我给对抗样本写了一条「外部风控变慢解释了延迟。这两件事应当分开看，
+#   前者推不出后者。」，标注 expected=dismissed（想表达"把泄漏否掉了"）。
+#   跑出来裁判判 absent —— 我第一反应是"**裁判错了一条**"。
+#
+#   查下去才发现：**那段话压根没点名内存泄漏**，裁判判 absent 是对的，
+#   错的是我的标注。**差一点把一个假失败记进结论。**
+#
+# ⇒ 规矩：凡是"工具错了一条"的直觉，先怀疑**自己的标准答案**。
+#   而这一条可以自动化：expected=dismissed 的样本，文本里**必须真的出现过**
+#   那个原因的关键词 —— 否则它根本不构成"提到了但否掉了"。
+
+
+def test_every_dismissed_fixture_actually_mentions_the_cause():
+    """`expected=DISMISSED` 的样本，必须**真的提到过**那个原因。
+
+    否则它测的不是"能不能识别降级"，而是"能不能看出这段话没提这件事"——
+    那是另一回事，而且这个标注是错的（P8 就栽在这里）。
+    """
+    from eval.judge import ADVERSARIAL, DISMISSED, FIXTURES
+    from eval.scenarios import Cause
+
+    leak = Cause(name="内存泄漏", keyword_groups=(("内存", "memory", "泄漏", "leak"),))
+
+    problems = []
+    for fx in ADVERSARIAL:
+        if fx["expected"] != DISMISSED:
+            continue
+        text = fx["text"]
+        mentioned = any(kw.lower() in text.lower() for kw in leak.keyword_groups[0])
+        if not mentioned:
+            problems.append(f"{fx['id']}：标注 dismissed，但文本里没有出现任何"
+                            f"「内存/泄漏/leak」字样 → 它其实是 absent，标注错了")
+
+    assert not problems, (
+        "以下对抗样本的标注与文本不符（**标准答案本身也要被检查**）：\n  "
+        + "\n  ".join(problems)
+    )
+
+
+def test_the_dismissed_fixture_check_is_not_vacuous():
+    """元测试：确认确实有 expected=dismissed 的样本被检查到，否则上面那条是空转。"""
+    from eval.judge import ADVERSARIAL, DISMISSED
+
+    n = sum(1 for fx in ADVERSARIAL if fx["expected"] == DISMISSED)
+    assert n >= 10, f"只有 {n} 条 dismissed 样本 —— 太少，那条检查意义有限"

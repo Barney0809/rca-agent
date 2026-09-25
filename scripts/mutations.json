@@ -636,5 +636,26 @@
         ]
       }
     ]
+  },
+  "fixture_self_check": {
+    "harness_log": [
+      "P8"
+    ],
+    "why": "P8: I labelled an adversarial fixture `dismissed` while its text never named the fault at all, then read the judge's `absent` as 'the judge got one wrong'. The labelled answer needs the same scrutiny as the tool: a `dismissed` fixture must actually mention the cause, otherwise it is really an `absent` case and the label is simply wrong.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "fixture-a-drop-the-mention-keep-the-label",
+        "desc": "Re-enact the P8 mistake: rewrite adv-8 so it no longer names the fault, while keeping expected=dismissed.",
+        "file": "eval/judge.py",
+        "find": "\"text\": \"外部风控变慢解释了延迟上升。至于 order 侧的内存增长，\"\n                \"这两件事应当分开看，前者推不出后者。\",",
+        "replace": "\"text\": \"外部风控变慢解释了延迟上升。这两件事应当分开看，前者推不出后者。\",",
+        "expect_red": [
+          "tests/test_eval.py::test_every_dismissed_fixture_actually_mentions_the_cause"
+        ]
+      }
+    ]
   }
 }
