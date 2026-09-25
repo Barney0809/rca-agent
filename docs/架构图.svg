@@ -30,12 +30,12 @@
   <text class="ts" x="52" y="164">specialist.py × 3　日志 / 指标 / 变更 —— 各自只看自己那一路</text>
   <text class="ts" x="52" y="186">coordinator.py　交叉质证（举证责任机械校验）+ 裁决</text>
 
-  <!-- LangGraph 未接线 -->
-  <rect class="todo" x="660" y="92" width="288" height="112"/>
-  <text class="tb" x="680" y="118">LangGraph 编排框架（未接线）</text>
-  <text class="ts" x="680" y="142">依赖里有，代码里零命中</text>
-  <text class="ts" x="680" y="164">代价：没有 checkpointer</text>
-  <text class="ts" x="680" y="186">⇒ 断点续跑（AC-10）未实现　见 ADR-0001</text>
+  <!-- LangGraph 已接线（只接在断点续跑那条路上） -->
+  <rect class="impl" x="660" y="92" width="288" height="112"/>
+  <text class="tb" x="680" y="118">LangGraph + SQLite 检查点（已接线）</text>
+  <text class="ts" x="680" y="142">graph_loop.py：StateGraph + checkpointer</text>
+  <text class="ts" x="680" y="164">真杀进程 → 另一个进程续跑成功</text>
+  <text class="ts" x="680" y="186">评测仍走手写循环（两侧同驱动）见 ADR-0001</text>
 
   <!-- 2. 工具面 -->
   <rect class="impl" x="32" y="240" width="600" height="104"/>

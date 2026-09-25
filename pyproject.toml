@@ -15,28 +15,24 @@ dependencies = [
     "langgraph>=1.2.12",
     "langchain-core>=1.6.4",
     "langchain-openai>=1.6.3",
-
     # --- 协议与模型 ---
     "mcp>=2.2.0",
     "openai>=3.17.0",
-
     # --- 数据与校验 ---
     "pydantic>=2.13.5",
-
     # --- 被诊断系统 ---
     "fastapi>=0.141.1",
     "uvicorn>=0.53.0",
-
     # --- 工程基础 ---
     "httpx>=0.28.1",
     "tiktoken>=0.14.0",
     "structlog>=26.1.0",
     "python-dotenv>=1.0.1",
-
     # --- 被诊断系统的公共代码（world/common）在本机也要能 import ---
     # 理由：world/common/config.py 需要 redis 客户端；而流量生成器、
     # 故障注入驱动、回归测试都是从本机跑的，必须能 import world.*。
     "redis>=5.0",
+    "langgraph-checkpoint-sqlite>=3.1.1",
 ]
 
 [dependency-groups]

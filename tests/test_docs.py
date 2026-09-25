@@ -34,7 +34,16 @@ LINK_RE = re.compile(r"\[[^\]]*\]\(([^)#\s]+)")
 def _docs() -> list[Path]:
     out = []
     for p in ROOT.rglob("*.md"):
-        if any(part in p.parts for part in SKIP_PARTS):
+        # ⚠️ 必须比对**相对于项目根**的路径，不能比对绝对路径的每一段。
+        #
+        #    绝对路径在变异副本里是 `D:\...\rca-mutants\control-xxx\docs\...`，
+        #    里面正好含有被跳过的名字 `rca-mutants` ⇒ **每一份文档都被跳过**，
+        #    扫描结果为 0；而"扫到 0 个文档"在别处看起来仍然像"通过"。
+        #
+        #    这个坑 `tests/test_offline.py::_executable_scripts()` **早就用注释记过**，
+        #    我在这里又犯了一次 —— 是变异检查的**控制组**当场抓出来的
+        #    （它报的是那句话："the copy itself is broken"）。
+        if any(part in p.relative_to(ROOT).parts for part in SKIP_PARTS):
             continue
         out.append(p)
     return sorted(out)
@@ -167,3 +176,53 @@ def test_outward_docs_do_not_duplicate_counts(name: str) -> None:
 
     for bad in ("190 passed", "193 passed", "66 个变异体", "29 组", "51 条封堵"):
         assert bad not in text, f"{name} 里出现了计数「{bad}」—— 计数只该写在 docs/00-状态.md"
+
+def test_the_eval_path_still_uses_the_hand_written_loop() -> None:
+    """**"评测仍走手写循环"这句话必须为真** —— 它保护的是"两侧可比"。
+
+    ADR-0001 里的取舍：LangGraph 只接在**断点续跑**那条路上，评测路径保持手写循环，
+    因为两侧必须同驱动才可比。这条不变量有两个方向，都要守：
+
+      · 代码方向：`eval/runner.py` **不许**把驱动换成图（否则 D12/D15 的数字立刻不可比）；
+      · 文档方向：README 必须**写明**这件事（否则读者会以为评测跑在 LangGraph 上）。
+
+    ⚠️ 这条是替掉旧守卫的：原来的 `readme1` 变异体针对的是
+    「README 把 LangGraph 画成已实现」—— 而 D16 之后 LangGraph **真的接线了**，
+    那条不变量的**主题消失了**（守卫自动跳过、变异体随之过期）。
+    与其留着一条空转的守卫，不如换成这条**现在还活着**的。
+    """
+    runner_src = (ROOT / "eval" / "runner.py").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "graph_loop" not in runner_src, (
+        "评测路径换成了图驱动 —— 那 D12/D15 的定稿数字就与手写循环那一侧不可比了。\n"
+        "若确实要换，必须两侧同时换并**重跑定稿**，同时更新文档里的口径说明。"
+    )
+    assert "评测数字仍出自手写循环" in readme, (
+        "README 没有写明「评测仍走手写循环」—— 读者会以为评测跑在 LangGraph 上"
+    )
+
+def test_doc_scan_survives_a_project_path_that_looks_skippable(tmp_path, monkeypatch) -> None:
+    """#52：**项目自己被放在一个"看起来该跳过"的目录下**时，文档扫描不能静默扫到 0 个。
+
+    现场：我给这条守卫写 `_docs()` 时，用**绝对路径的每一段**去比对跳过目录
+    （`if any(part in p.parts ...)`）。在本仓库里它"碰巧"没问题 ——
+    但变异检查把项目复制到 `rca-mutants/...` 之后，**每一份文档都被跳过**，
+    扫描结果为 0，控制组当场变红（"the copy itself is broken"）。
+
+    ⇒ 这条用例把那种目录结构**在本地造出来**（路径里放 `runs/`），
+       于是"绝对路径 vs 相对路径"这个差别不用等副本就能验。
+    """
+    td = __import__("tests.test_docs", fromlist=["_docs"])
+
+    fake_root = tmp_path / "runs" / "rca-agent"      # ← 路径里含被跳过的名字
+    (fake_root / "docs").mkdir(parents=True)
+    (fake_root / "docs" / "a.md").write_text("没有链接", encoding="utf-8")
+    (fake_root / "README.md").write_text("没有链接", encoding="utf-8")
+    monkeypatch.setattr(td, "ROOT", fake_root)
+
+    found = {p.name for p in td._docs()}
+
+    assert found == {"a.md", "README.md"}, (
+        f"扫描只找到 {found} —— 项目路径里出现「runs」这类名字时，整个扫描被静默跳过了"
+    )

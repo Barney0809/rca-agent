@@ -968,21 +968,12 @@
     "harness_log": [
       "#41"
     ],
-    "why": "#41: the README architecture diagram presented three things as built that do not exist in the code at all: a LangGraph orchestration layer, an MCP tool boundary, and a policy enforcement point running as a separate process. I had copied the DESIGN diagram from docs/02 into the README and the implementation later diverged -- and nothing in the document system marks design as distinct from implementation. This is the highest-stakes entry of the audit: a project whose front page advertises frameworks it never used collapses on the first follow-up question ('show me your state graph').",
+    "why": "#41: the README architecture diagram presented three things as built that do not exist in the code at all: a LangGraph orchestration layer, an MCP tool boundary, and a policy enforcement point running as a separate process. I had copied the DESIGN diagram from docs/02 into the README and the implementation later diverged -- and nothing in the document system marks design as distinct from implementation. This is the highest-stakes entry of the audit: a project whose front page advertises frameworks it never used collapses on the first follow-up question ('show me your state graph'). UPDATE (D16): the original readme1 mutant guarded 'do not present LangGraph as built'. LangGraph is now genuinely wired (graph_loop.py) for resumability, so that invariant lost its subject and the mutant went permanently green -- retired rather than left spinning. It is replaced by the invariant that now matters: the README must keep saying the EVAL path still runs the hand-written loop, and eval/runner.py must not swap in the graph driver, because the two sides have to share a driver to stay comparable.",
     "tests": [
-      "tests/test_deliverable.py"
+      "tests/test_deliverable.py",
+      "tests/test_docs.py"
     ],
     "mutations": [
-      {
-        "id": "readme1-present-langgraph-as-built",
-        "desc": "Present LangGraph as part of the implementation by dropping the 'not wired' marker from the architecture diagram, so the front page again advertises a framework the code never imports.",
-        "file": "README.md",
-        "find": "┌── Agent 编排（**手写循环**；LangGraph **未接线**）",
-        "replace": "┌── Agent 编排（LangGraph）",
-        "expect_red": [
-          "tests/test_deliverable.py::test_outward_facing_docs_mark_unbuilt_layers_instead_of_presenting_them_as_built"
-        ]
-      },
       {
         "id": "readme2-call-the-policy-point-a-separate-process",
         "desc": "Describe the policy enforcement point as a separate process. It is an in-process module reached by in-process calls -- there is no process boundary, and no MCP either. (Retargeted in D15 after the surrounding README table was rewritten; the staleness check is what flagged it.)",
@@ -991,6 +982,16 @@
         "replace": "| 策略执行点（**独立进程**） | `src/rca/policy/`",
         "expect_red": [
           "tests/test_deliverable.py::test_outward_facing_docs_mark_unbuilt_layers_instead_of_presenting_them_as_built"
+        ]
+      },
+      {
+        "id": "readme1b-hide-that-the-eval-still-uses-the-hand-written-loop",
+        "desc": "Delete the sentence stating that the eval path still runs the hand-written loop. LangGraph is now genuinely wired for resumability, so without that sentence a reader concludes the headline numbers were produced by the graph driver -- which would make the two sides incomparable.",
+        "file": "README.md",
+        "find": "（4 条用例 + 2 个变异体；**评测数字仍出自手写循环**，见 `docs/adr/0001`）",
+        "replace": "（4 条用例 + 2 个变异体）",
+        "expect_red": [
+          "tests/test_docs.py::test_the_eval_path_still_uses_the_hand_written_loop"
         ]
       }
     ]
@@ -1242,6 +1243,58 @@
         "replace": "from rca.policy import PolicyEngine\nfrom rca.tools_ops import OpsToolBox  # 变异体：第三条门",
         "expect_red": [
           "tests/test_mcp_ops.py::test_only_the_two_sanctioned_doors_reach_the_ops_toolbox"
+        ]
+      }
+    ]
+  },
+  "graph_resume_ac10": {
+    "harness_log": [
+      "#51"
+    ],
+    "why": "#51: ADR-0001 pre-registered the trigger for wiring LangGraph ('when you need loop-level resumability, that is AC-10, and the checkpointer is a ready-made capability'). D16 acted on it: src/rca/agents/graph_loop.py runs the baseline loop as a StateGraph compiled with the official SQLite checkpointer, and the eval path is deliberately left on the hand-written loop because both sides must share a driver to stay comparable. The evidence for AC-10 is not 'I imported langgraph': it is (a) a real os._exit(9) mid-run leaving checkpoints on disk, (b) a SECOND process resuming with input=None and finishing, and (c) a test proving the resumed run does NOT re-execute the steps that already completed (a rerun would also produce an answer, but calling that 'resume' would be a lie). The mutants below are deliberately NOT about the routing/budget branch -- mutating that one makes the suite loop forever, so it is guarded by a bounded test instead (max_steps=2 with an always-tool-calling stub).",
+    "tests": [
+      "tests/test_graph_loop.py"
+    ],
+    "mutations": [
+      {
+        "id": "graph1-forget-the-accumulated-counters",
+        "desc": "Reset the cumulative counters instead of adding to them, so a resumed run reports cost/steps starting from zero -- quietly restarting the MEASUREMENT together with the process.",
+        "file": "src/rca/agents/graph_loop.py",
+        "find": "        out[\"cost_yuan\"] = float(state.get(\"cost_yuan\") or 0.0) + float(result.cost_yuan)",
+        "replace": "        out[\"cost_yuan\"] = float(result.cost_yuan)",
+        "expect_red": [
+          "tests/test_graph_loop.py::test_resume_after_a_crash_does_not_redo_completed_steps"
+        ]
+      },
+      {
+        "id": "graph2-one-thread-for-everything",
+        "desc": "Make the thread id ignore the fault and round, so two different runs share one checkpoint history and the second run silently resumes the first one's work.",
+        "file": "src/rca/agents/graph_loop.py",
+        "find": "    return f\"baseline-{ctx.run_id}-{fault_id}-r{round_no}\"",
+        "replace": "    return f\"baseline-{ctx.run_id}\"",
+        "expect_red": [
+          "tests/test_graph_loop.py::test_a_fresh_thread_id_starts_from_scratch"
+        ]
+      }
+    ]
+  },
+  "doc_scan_does_not_skip_silently": {
+    "harness_log": [
+      "#52"
+    ],
+    "why": "#52: I wrote the docs-scan helper skipping 'any absolute path part' that looks like an excluded directory. In this repository that is invisible, but the mutation checker copies the project into rca-mutants/... -- a name on the skip list -- so EVERY document got skipped, the scan reported zero, and the CONTROL run went red ('the copy itself is broken'). tests/test_offline.py had already documented this exact trap in a comment, which means I read that comment and repeated the mistake elsewhere. The value of this group is that it makes the trap reproducible WITHOUT a mutant copy: the test builds a project path containing 'runs/' and asserts the scan still finds the docs.",
+    "tests": [
+      "tests/test_docs.py"
+    ],
+    "mutations": [
+      {
+        "id": "docscan1-compare-absolute-path-parts",
+        "desc": "Go back to comparing every part of the ABSOLUTE path against the skip list, so a project living under a directory named 'runs' (or 'rca-mutants') has all of its documents silently skipped -- a scan of zero that still looks like a pass.",
+        "file": "tests/test_docs.py",
+        "find": "        if any(part in p.relative_to(ROOT).parts for part in SKIP_PARTS):",
+        "replace": "        if any(part in p.parts for part in SKIP_PARTS):",
+        "expect_red": [
+          "tests/test_docs.py::test_doc_scan_survives_a_project_path_that_looks_skippable"
         ]
       }
     ]

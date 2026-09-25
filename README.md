@@ -63,7 +63,7 @@
 > 📊 一页图版本：`docs/架构图.svg`（绿色实线 = 已实现，红色虚线 = 未接线，可直接投屏）
 
 ```
-        ┌── Agent 编排（**手写循环**；LangGraph **未接线**）───────┐
+        ┌── Agent 编排（**手写循环**；LangGraph 已接线，见 graph_loop.py）─┐
         │   baseline.py（单 Agent）                              │
         │   specialist.py × 3（按角色限定工具面）                 │
         │   coordinator.py（交叉质证 + 裁决）                     │
@@ -96,15 +96,14 @@
 | 评测 harness（关键词主判 + LLM 裁判交叉校验、噪声带、存档、轨迹） | `eval/runner.py`、`eval/judge.py` |
 | 策略执行点（路径守卫 / 动词分级 / 隔离区 / 审计） | `src/rca/policy/`（27 条用例）+ **ops 工具的接线** `src/rca/tools_ops.py`、`scripts/ops.py`（14 条用例） |
 | **MCP 工具面收口**（ops 三工具经 MCP 暴露，无旁路） | `src/rca/mcp_server.py` + `scripts/ops_mcp_server.py`（6 条用例 + 2 个变异体） |
+| **LangGraph 编排 + 循环级断点续跑**（AC-10） | `src/rca/agents/graph_loop.py` + `scripts/demo_resume.py`（4 条用例 + 2 个变异体；**评测数字仍出自手写循环**，见 `docs/adr/0001`） |
 | **错误封堵清单**：一条错误只有在**回归用例能变红**之后才算封堵 | [`docs/harness-log.md`](docs/harness-log.md) + `scripts/mutate_check.py` |
 
 **未接线**（写在 README 里就必须说清，见 `docs/harness-log.md` #41）：
 
 | 没有的东西 | 现状 | 这意味着什么 |
 |---|---|---|
-| **LangGraph** —— **未接线** | 依赖里有，代码里**一次都没用**（编排是手写循环） | 如果你要看"state graph / checkpointer"，这里没有 |
 | **让诊断 Agent 自己动手** —— **未接线** | 诊断角色只有 3 个只读工具；ops 工具只由**人的 CLI**（`scripts/ops.py`）发起 | 这是刻意的：授权只能由人给。要让 Agent 动手，得先有"谁批准、怎么留痕"的流程 |
-| **断点续跑** —— **未实现** | 未做（AC-10 未验证） | 进程被杀就得重跑 |
 
 > 这一栏是刻意留在首页的。一个把"没做的部分"写在首页的项目，
 > 比一个只在角落里标一句"未接线"的项目可信得多 —— 而**可信**是这个仓库要证明的唯一一件事。
