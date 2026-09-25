@@ -1,0 +1,50 @@
+{
+  "kind": "rca-agent replay pack",
+  "version": 1,
+  "built_at": "2026-09-25T16:35:52+08:00",
+  "model": "deepseek-flash",
+  "recording": "_recordings/replay-deepseek-flash.ndjson",
+  "recording_entries": 253,
+  "recording_entries_dropped": 390,
+  "scenarios": {
+    "F1": {
+      "run_id": "r-20260924-054323",
+      "source": "runs/r-20260924-054323",
+      "logs_raw_bytes": 1449809,
+      "logs_gz_bytes": 164385
+    },
+    "F8": {
+      "run_id": "r-20260925-072345",
+      "source": "runs/r-20260925-072345",
+      "logs_raw_bytes": 7630803,
+      "logs_gz_bytes": 867456
+    }
+  },
+  "totals": {
+    "logs_raw_bytes": 9080612,
+    "logs_gz_bytes": 1031841
+  },
+  "files": {
+    "r-20260924-054323/scenario.json": "8f6a8758f7ca2fbcb0425186a1a8ee22e1722c91c8ac429ff77a04632639ee09",
+    "r-20260924-054323/metrics-before.json": "c2263d1c36ba2292640eaa289c34c211fb84bcd7c6863335050add8373b83f87",
+    "r-20260924-054323/metrics-after.json": "2b86e90b323d85130f25f1e0700395336a5bebcd19a5db7363476d3096c865b5",
+    "r-20260924-054323/changes.ndjson": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "r-20260924-054323/logs/order.log.gz": "71731828571464f640e6df3221155a4e2902a8a75a985a135582f731b740ab98",
+    "r-20260924-054323/logs/inventory.log.gz": "5781a2b34a47b78e717ca3e2f80fc48d84355f2ae3f5d53ab6b169b68f6f725f",
+    "r-20260924-054323/logs/payment.log.gz": "2fd6d8bf4ad5fe277c32b85b584b79f13128963c31b917d885d0b964654e3353",
+    "r-20260925-072345/scenario.json": "3188223ffe7004c5d329bc306242cdf3b9965deebf0da541f0194c19c874acf4",
+    "r-20260925-072345/metrics-before.json": "a2208002e77fe53f713f96bbb8495e5fd42a72cacc6032e3ec5f5922386b2f41",
+    "r-20260925-072345/metrics-after.json": "1ca8c914a649a2203fa4c79611003486cd3d6dd9c4a2cbfd43192217ad74bdd2",
+    "r-20260925-072345/changes.ndjson": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "r-20260925-072345/logs/order.log.gz": "4a3d8c8067e8bcd7fd2956bc0a2bb47657f6f412362451553ba6c4caf2c77a52",
+    "r-20260925-072345/logs/inventory.log.gz": "d95567985356492bcb6208e0040b7104a80d05976c52f36cd5434c629e946e0f",
+    "r-20260925-072345/logs/payment.log.gz": "50e1016d899ba5f2075389375d208aa5e629c6c4a592b18823b1fee075d8634f",
+    "_recordings/replay-deepseek-flash.ndjson": "a9d6fc83f7bb8aed7c752728cab55839aee424f81116518e507d7f720602af3c"
+  },
+  "notes": [
+    "场景数据来自本机 runs/<run_id>/，目录名与 tag 绑定，改名会让回放 miss。",
+    "日志以 .gz 存放，collect.py 直接读；两种形式内容必须逐字节一致。",
+    "录制默认**裁剪**：只保留本次打包场景用到的条目（外加 coordinator 这类不带场景目录的收尾环节）。",
+    "重放不需要 API Key，也不会产生任何费用（录制未命中会直接报错，不会退回真实调用）。"
+  ]
+}

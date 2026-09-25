@@ -1,0 +1,97 @@
+{
+  "run_id": "r-20260925-072345",
+  "fault_id": "F8",
+  "name": "多故障叠加（风控变慢 + 内存泄漏，两者因果独立）",
+  "started_at": "2026-09-25T07:23:45+08:00",
+  "finished_at": "2026-09-25T07:26:27+08:00",
+  "patches": {
+    "payment": {
+      "risk_latency_ms": 800
+    },
+    "order": {
+      "leak_mb_per_req": 0.5
+    }
+  },
+  "changes": [],
+  "symptom_at": "order",
+  "root_at": "order+payment",
+  "cross_service": true,
+  "ground_truth": "**两个独立的故障同时存在**：① payment 的外部风控依赖延迟升高（约 800ms）；② order 自身的内存泄漏（约 0.5MB/次请求）。两者因果独立，只答出一个即为不完整",
+  "expect_log_keywords": [
+    "外部风控响应缓慢"
+  ],
+  "load": {
+    "ok": 8049,
+    "http_4xx": 0,
+    "http_5xx": 0,
+    "error": 0,
+    "total": 8049,
+    "wall_s": 150.54,
+    "rps": 53.5,
+    "avg_latency_ms": 924.3
+  },
+  "log_lines": 64392,
+  "captured_log_lines": {
+    "order": 24147,
+    "inventory": 24147,
+    "payment": 16098
+  },
+  "knobs_before": {
+    "order": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "inventory": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "payment": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    }
+  },
+  "knobs_after": {
+    "order": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "inventory": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "payment": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    }
+  }
+}

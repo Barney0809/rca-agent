@@ -1,0 +1,94 @@
+{
+  "run_id": "r-20260924-054323",
+  "fault_id": "F1",
+  "name": "外部依赖变慢",
+  "started_at": "2026-09-24T05:43:23+08:00",
+  "finished_at": "2026-09-24T05:44:17+08:00",
+  "patches": {
+    "payment": {
+      "risk_latency_ms": 800
+    }
+  },
+  "changes": [],
+  "symptom_at": "order",
+  "root_at": "payment",
+  "cross_service": true,
+  "ground_truth": "payment 的外部风控依赖延迟升高（≥800ms）",
+  "expect_log_keywords": [
+    "外部风控响应缓慢"
+  ],
+  "load": {
+    "ok": 1529,
+    "http_4xx": 0,
+    "http_5xx": 0,
+    "error": 0,
+    "total": 1529,
+    "wall_s": 50.29,
+    "rps": 30.4,
+    "avg_latency_ms": 947.9
+  },
+  "log_lines": 12232,
+  "captured_log_lines": {
+    "order": 4587,
+    "inventory": 4587,
+    "payment": 3058
+  },
+  "knobs_before": {
+    "order": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "inventory": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "payment": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    }
+  },
+  "knobs_after": {
+    "order": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "inventory": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    },
+    "payment": {
+      "pool_limit": 64,
+      "pool_acquire_timeout_ms": 2000,
+      "slow_op_ms": 0,
+      "leak_mb_per_req": 0.0,
+      "risk_latency_ms": 30,
+      "risk_error_rate": 0.0,
+      "downstream_retries": 1
+    }
+  }
+}

@@ -151,16 +151,24 @@ uv run python eval/runner.py --agent multi --faults F1,F8 --rounds 3  # 多 Agen
 换一批目录必然第一步就 miss：
 
 ```bash
-uv run python scripts/make_replay_pack.py             # 用你自己的 runs/ 打一个便携包
-$env:RCA_REPLAY_ROOT = "runs/_replay_pack"            # PowerShell（bash: export RCA_REPLAY_ROOT=...）
-uv run python eval/runner.py --agent multi --rounds 3 --mode replay
+# 仓库自带一个演示包（replay_pack/，1.73 MB，F1+F8 两个场景）—— 克隆后直接就能跑：
+#   bash: export RCA_REPLAY_ROOT=replay_pack
+$env:RCA_REPLAY_ROOT = "replay_pack"
+uv run python eval/runner.py --agent multi --faults F1,F8 --rounds 1 --mode replay
+
+# 想要完整 7 场景的包，就用你自己的 runs/ 重新打（日志 gzip 24 MB → 2.6 MB）：
+uv run python scripts/make_replay_pack.py --out runs/_replay_pack
 ```
 
-包本体（约 4.4 MB）**未随仓库提交**（开放项见 `docs/00-状态.md`），
-所以**陌生人克隆后还跑不了**零成本重放 —— 得先有场景目录与录制。
-另外：回放复现的是"录制内部自洽的那条轨迹"，**不等于**某一次归档运行
-（同一批响应下归档判 19/21、回放判 21/21），"一批录制 = 一次运行"还没做。
-这两条如实写在这里，不写成"已实现"。
+演示包**随仓库提交**（日志 1.03 MB + 裁剪后的录制 0.76 MB，录制从 643 条裁到 253 条）。
+`tests/test_replay_pack.py` 里有一条**真的重放一次**的用例：它在毒化环境
+（假 Key + `127.0.0.1:9`）下跑完一次 F1，所以"零 API 调用"每次跑 CI 都被重新证明一遍。
+
+⚠️ 两条如实写在这里、不写"已实现"的边界：
+① 完整 7 场景包（4.4 MB）**仍未入库**，只有演示包入库；
+② 回放复现的是"录制内部自洽的那条轨迹"，**不等于**某一次归档运行
+（同一批响应下归档判 19/21、回放判 21/21，21 次里 13 次步骤数不同）——
+"一批录制 = 一次运行"还没做。
 
 ---
 

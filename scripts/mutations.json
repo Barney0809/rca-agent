@@ -1303,7 +1303,7 @@
     "harness_log": [
       "#53"
     ],
-    "why": "#53: --mode replay had NEVER actually run to completion, yet 'a stranger can replay for free' was written into the docs as a shipped capability. The real cause is structural: the recording key is sha256(tag+model+messages) and the tag embeds the scenario directory name (a fault-injection timestamp), so any fresh set of scenario dirs misses on the very first call. Replay therefore needs the recording AND the same scenario dirs (same names, same bytes). Five invariants make that checkable instead of aspirational: (a) the gzipped log a pack ships must be byte-equivalent to the plain log, or the key changes and replay misses while looking like a model/code problem; (b) a tampered pack file must be refused; (c) a missing pack file must be refused, not turned into a confusing crash; (d) RCA_REPLAY_ROOT must really move the data root; (e) a replay run must never be published as a measurement -- replay is identical by construction, so publishing it silently replaces the page's accuracy/cost with a re-reading; (f) the pack must be read-only -- any non-replay mode has to be refused, because the recording path is derived from the same data root, so --mode record appends a record-*.ndjson INSIDE the pack, and the self-check cannot see it (it only hashes the files listed in the manifest).",
+    "why": "#53: --mode replay had NEVER actually run to completion, yet 'a stranger can replay for free' was written into the docs as a shipped capability. The real cause is structural: the recording key is sha256(tag+model+messages) and the tag embeds the scenario directory name (a fault-injection timestamp), so any fresh set of scenario dirs misses on the very first call. Replay therefore needs the recording AND the same scenario dirs (same names, same bytes). Five invariants make that checkable instead of aspirational: (a) the gzipped log a pack ships must be byte-equivalent to the plain log, or the key changes and replay misses while looking like a model/code problem; (b) a tampered pack file must be refused; (c) a missing pack file must be refused, not turned into a confusing crash; (d) RCA_REPLAY_ROOT must really move the data root; (e) a replay run must never be published as a measurement -- replay is identical by construction, so publishing it silently replaces the page's accuracy/cost with a re-reading; (f) the pack must be read-only -- any non-replay mode has to be refused, because the recording path is derived from the same data root, so --mode record appends a record-*.ndjson INSIDE the pack, and the self-check cannot see it (it only hashes the files listed in the manifest); (g) the recording trim must keep what the pack needs -- entries for the packed scenarios AND the coordinator entries, which carry no scenario directory at all.",
     "tests": [
       "tests/test_replay_pack.py"
     ],
@@ -1359,6 +1359,16 @@
         ]
       },
       {
+        "id": "replay-g-trim-by-directory-name-only",
+        "desc": "Trim by 'this tag looks like a scenario directory' instead of 'this tag belongs to a scenario in THIS pack'. The coordinator entries carry no scenario directory at all, so they get dropped too -- measured: 643 entries trimmed to 253 is fine, but trim to 229 and the replay misses mid-run instead of hitting every recorded step.",
+        "file": "scripts/make_replay_pack.py",
+        "find": "        if leaf.startswith(\"r-\") and leaf not in run_ids:",
+        "replace": "        if leaf.startswith(\"r-\"):",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_trimming_keeps_what_the_pack_needs"
+        ]
+      },
+      {
         "id": "replay-f-read-only-pack-accepts-record-mode",
         "desc": "Let every mode run on the read-only pack again. --mode record then appends a record-*.ndjson INSIDE the pack, and the pack self-check cannot see it, because it only hashes the files listed in the manifest -- silent pollution of a read-only artifact, found while auditing this very session.",
         "file": "eval/runner.py",
@@ -1383,7 +1393,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**259 passed / 1 skipped**",
+        "find": "**261 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1393,7 +1403,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**40 组 / 95 个变异体，全部 SEALED**",
+        "find": "**40 组 / 96 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"

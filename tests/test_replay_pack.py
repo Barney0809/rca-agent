@@ -30,7 +30,7 @@ from eval import runner  # noqa: E402
 from rca.llm.recording import Recorder  # noqa: E402
 from rca.telemetry.collect import _read_log_text  # noqa: E402
 
-PACK = ROOT / "runs" / "_replay_pack"
+PACK = ROOT / "replay_pack"   # ★ 随仓库提交的演示包（不是 runs/ 下那份本机包）
 
 
 def _make_pack(root: Path, text: str = "2026-09-25 07:00:00 INFO [order] hello\n") -> Path:
@@ -147,21 +147,19 @@ def test_replay_never_writes_and_never_falls_back(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------- 5) 仓库里的包
 
-@pytest.mark.skipif(not (PACK / "pack.json").exists(), reason="本机没有重放包")
-def test_local_replay_pack_is_intact_if_present() -> None:
-    """⚠️ 名字里的 local 是有意的（2026-09-25 自审时改的名）。
+def test_bundled_replay_pack_is_intact() -> None:
+    """随仓库提交的演示包必须完好 —— **这条用例不再 skip**。
 
-    这个包**未随仓库提交**（约 4.4 MB，见 docs/00 的开放项），
-    所以这条用例在**干净克隆里只会 skip** —— 原来的名字
-    `test_committed_replay_pack_is_intact` 是在说一句不成立的话
-    （"committed" 的那份并不存在），和 #38 是同一族错误：
-    把"只在我这台机器上成立"写成"仓库里成立"。
+    ⚠️ 为什么改了名（2026-09-25 自审时）：
+    原来那条叫 `test_committed_replay_pack_is_intact`，却指向 `runs/_replay_pack`
+    —— 那个包**并没提交**，于是它在干净克隆里只会 skip，名字却在说"已提交"。
+    现在包真的随仓库提交（仓库根的 `replay_pack/`，1.73 MB，F1+F8），
+    名字与事实一致，克隆里也真的执行。
     """
     manifest = runner.verify_replay_pack(PACK)
-    scenario_ids = {v["run_id"] for v in manifest["scenarios"].values()}
-    assert len(scenario_ids) >= 1
+    assert manifest["scenarios"], "包里一个场景都没有"
     # 目录名就是 tag 的一部分：改名等于让回放 miss，所以必须在清单里对得上
-    for name in scenario_ids:
+    for name in {v["run_id"] for v in manifest["scenarios"].values()}:
         assert (PACK / name).is_dir(), f"清单里的场景目录不存在：{name}"
 
 
@@ -202,3 +200,58 @@ def test_demo_page_never_publishes_a_replay_run(
     picked = make_demo.latest("multi-*/results.json")
     assert picked is not None
     assert picked.parent.name == "multi-20260925-131953", "回放存档被当成了测量"
+
+
+# ---------------------------------------------------------------- 7) 真的重放一次
+
+def test_bundled_pack_replays_without_any_api_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """★ 最强的一条：在"任何真实调用都必然失败"的环境里，真的重放一次。
+
+    毒化两处：Key 换假的、`DEEPSEEK_BASE_URL` 指向 `127.0.0.1:9`（无人监听）。
+    任何一次真实 HTTP 都会立刻失败 ⇒ **跑完就等于没走过网络**。
+
+    它同时守着"录制裁得对不对"：包里那份录制裁掉了 390 条用不到的响应，
+    少了任何一条必要的，这里都会 miss 并抛错。
+    """
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-replay-only-not-a-real-key")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("RCA_REPLAY_ROOT", str(PACK))
+
+    report = runner.run(fault_ids=["F1"], rounds=1, mode="replay", agent="multi", verbose=False)
+
+    assert report.attempts, "一次尝试都没有 —— 包里的场景没被发现"
+    a = report.attempts[0]
+    assert a.correct, f"回放没答对（录制裁得不够？）：{a.root_cause[:150]}"
+    assert a.cost_yuan > 0, "成本应按录制里的 token 用量折算出来（这不是花掉的钱）"
+    assert a.steps > 0 and a.tool_calls > 0, "步数与工具调用数不该是 0"
+
+
+def test_trimming_keeps_what_the_pack_needs(tmp_path: Path) -> None:
+    """录制裁剪的两条边界（包里 643 条裁到 253 条，靠的就是这个规则）。
+
+    必须保留：① 本次打包场景的条目 ② **不带场景目录**的 tag（`coordinator`
+    是多 Agent 流程的收尾环节，按目录名过滤会把它们全滤掉 ⇒ 回放中途 miss）
+    可以丢：其它场景目录的条目。
+    """
+    from scripts import make_replay_pack
+
+    rows = [
+        {"key": "k1", "tag": "specialist/metrics/r-20260924-054323", "response": {}},
+        {"key": "k2", "tag": "crossexam/logs/r-20260925-072345", "response": {}},
+        {"key": "k3", "tag": "coordinator", "response": {}},
+        {"key": "k4", "tag": "specialist/change/r-20260924-054607", "response": {}},
+        {"key": "k5", "tag": "baseline/r-20260924-054323", "response": {}},
+    ]
+    src = tmp_path / "record.ndjson"
+    src.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8"
+    )
+
+    dst = tmp_path / "out" / "replay.ndjson"
+    kept, dropped = make_replay_pack._trim_recording(
+        src, dst, {"r-20260924-054323", "r-20260925-072345"}
+    )
+
+    assert (kept, dropped) == (4, 1), f"裁剪计数不对：kept={kept} dropped={dropped}"
+    keys = [json.loads(ln)["key"] for ln in dst.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert keys == ["k1", "k2", "k3", "k5"], f"裁剪结果不对：{keys}"

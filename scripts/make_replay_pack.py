@@ -91,7 +91,42 @@ def _write_gz(src: Path, dst: Path) -> tuple[int, int]:
     return len(raw), dst.stat().st_size
 
 
-def build(out_dir: Path, *, faults: list[str] | None, model: str) -> dict:
+def _trim_recording(src: Path, dst: Path, run_ids: set[str]) -> tuple[int, int]:
+    """把录制裁到"这次打包真正会用到"的条目，返回 (保留, 丢弃)。
+
+    为什么需要裁（2026-09-25，D20b）：
+    录制文件是**追加**的，里面混着多次运行、多个场景目录的响应（实测 643 条）。
+    只装 2 个场景却带上全部条目 ⇒ 包里 90% 是永远命不中的数据。
+    要把它随仓库提交（让陌生人克隆后就能零成本重放），就必须裁。
+
+    规则：tag 的最后一段如果是 `r-…`（场景目录名），它必须在**这次打包的**场景里；
+    `coordinator` 这类**不带场景目录**的 tag 一律保留
+    —— 它们是多 Agent 流程的收尾环节，少了会让回放中途 miss。
+    """
+    kept = dropped = 0
+    out: list[str] = []
+    for line in src.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        leaf = str(rec.get("tag") or "").split("/")[-1]
+        if leaf.startswith("r-") and leaf not in run_ids:
+            dropped += 1
+            continue
+        out.append(line)
+        kept += 1
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
+    return kept, dropped
+
+
+def build(
+    out_dir: Path,
+    *,
+    faults: list[str] | None,
+    model: str,
+    keep_all_recording: bool = False,
+) -> dict:
     if os.environ.get("RCA_REPLAY_ROOT", "").strip():
         raise SystemExit(
             "检测到 RCA_REPLAY_ROOT 已设置 —— 打包必须从**本机真实 runs/** 打，\n"
@@ -148,10 +183,15 @@ def build(out_dir: Path, *, faults: list[str] | None, model: str) -> dict:
         print(f"  {fid:4} {run_dir.name:22} 日志 {logs_raw/1e6:6.2f} MB → {logs_gz/1e6:5.2f} MB")
 
     rec_dst = out_dir / "_recordings" / f"replay-{model}.ndjson"
-    rec_dst.parent.mkdir(parents=True, exist_ok=True)
-    rec_dst.write_bytes(record_src.read_bytes())
+    run_ids = {v["run_id"] for v in scenarios.values()}
+    if keep_all_recording:
+        rec_dst.parent.mkdir(parents=True, exist_ok=True)
+        rec_dst.write_bytes(record_src.read_bytes())
+        entries = sum(1 for ln in rec_dst.read_text(encoding="utf-8").splitlines() if ln.strip())
+        dropped = 0
+    else:
+        entries, dropped = _trim_recording(record_src, rec_dst, run_ids)
     files[str(rec_dst.relative_to(out_dir)).replace("\\", "/")] = _sha256(rec_dst)
-    entries = sum(1 for ln in rec_dst.read_text(encoding="utf-8").splitlines() if ln.strip())
 
     manifest = {
         "kind": "rca-agent replay pack",
@@ -160,12 +200,14 @@ def build(out_dir: Path, *, faults: list[str] | None, model: str) -> dict:
         "model": model,
         "recording": str(rec_dst.relative_to(out_dir)).replace("\\", "/"),
         "recording_entries": entries,
+        "recording_entries_dropped": dropped,
         "scenarios": scenarios,
         "totals": {"logs_raw_bytes": raw_total, "logs_gz_bytes": gz_total},
         "files": files,
         "notes": [
             "场景数据来自本机 runs/<run_id>/，目录名与 tag 绑定，改名会让回放 miss。",
             "日志以 .gz 存放，collect.py 直接读；两种形式内容必须逐字节一致。",
+            "录制默认**裁剪**：只保留本次打包场景用到的条目（外加 coordinator 这类不带场景目录的收尾环节）。",
             "重放不需要 API Key，也不会产生任何费用（录制未命中会直接报错，不会退回真实调用）。",
         ],
     }
@@ -175,7 +217,7 @@ def build(out_dir: Path, *, faults: list[str] | None, model: str) -> dict:
 
     print()
     print(f"  日志合计    {raw_total/1e6:.2f} MB → {gz_total/1e6:.2f} MB")
-    print(f"  录制        {entries} 条（{rec_dst.stat().st_size/1e6:.2f} MB）")
+    print(f"  录制        {entries} 条（裁掉 {dropped} 条）（{rec_dst.stat().st_size/1e6:.2f} MB）")
     print(f"  包           {out_dir}（{len(files)} 个受票据保护的文件）")
     print()
     print("  重放（零成本，不需要 API Key）：")
@@ -191,12 +233,19 @@ def main() -> int:
     ap.add_argument("--out", default=str(RUNS_DIR / "_replay_pack"))
     ap.add_argument("--faults", nargs="*", default=None, help="只打这些场景（默认全部）")
     ap.add_argument("--model", default="deepseek-flash")
+    ap.add_argument(
+        "--keep-all-recording", action="store_true",
+        help="不裁剪录制（默认只保留本次打包场景用到的条目）",
+    )
     args = ap.parse_args()
 
     print("=" * 96)
     print(f"  打重放包   输出={args.out}  模型={args.model}")
     print("=" * 96)
-    build(Path(args.out), faults=args.faults, model=args.model)
+    build(
+        Path(args.out), faults=args.faults, model=args.model,
+        keep_all_recording=args.keep_all_recording,
+    )
     return 0
 
 
