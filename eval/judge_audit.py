@@ -44,23 +44,59 @@ except Exception:
     pass
 
 from eval.judge import judge_cause  # noqa: E402
-from eval.scenarios import SCENARIOS, Cause, keyword_verdict  # noqa: E402
+from eval.scenarios import (  # noqa: E402
+    CAUSE_LABELS,
+    SCENARIOS,
+    Cause,
+    keyword_verdict,
+)
 from rca.llm.provider import DeepSeekClient, LlmConfig  # noqa: E402
 
 EVAL_DIR = ROOT / "runs" / "_eval"
 
-# 每个场景要判的"原因"标签。多故障场景（F8）判两条。
-# ⚠️ 用场景自己的 `required_causes`，不另写一份 —— 否则两边会走散。
-CAUSE_LABEL = {
-    "F1": "外部风控变慢",
-    "F7": "外部风控变慢",
-    "F2": "外部风控变慢",
-    "F3": "inventory 本环节处理变慢",
-    "F4": "inventory 的重试次数配置漂移",
-    "F5": "外部风控错误率升高",
-    "F6": "order 内存泄漏",
-    "F8": "内存泄漏",
-}
+# ⚠️ 这些"原因标签"**只有一份**，在 `eval/scenarios.py` 的 `CAUSE_LABELS` 里。
+#    本脚本曾经自己抄了一份（内容当时一致），而 `scenarios.py` 那段的注释恰好写着：
+#    "都从这里取。各自写一份的话，两边迟早走散 —— 而'两份判定不一致'这种 bug
+#     极难发现（本项目已经栽过一次）。"
+#    ⇒ 也就是说：**我抄了那句注释警告过一次的东西**（harness-log #43）。
+#      现在直接引用同一份，并且有用例守着"必须是同一个对象，不是副本"。
+
+NA = "n/a"
+
+
+def keyword_side(fault: str, text: str) -> str:
+    """关键词侧的判定（`asserted` / `dismissed` / `absent`），算不出来才是 `NA`。
+
+    P7：这个审计脚本曾经把"算不出来"输出成 `n/a`，**然后又把它计进"不一致"** ——
+    于是得到一份误导性的一致率：看起来像"裁判与关键词分歧"，其实只是没算出来。
+
+    ⇒ 两条规则：
+      ① 只要能算就必须算出来（未知场景才返回 `NA`）；
+      ② `NA` 由 `agreement_summary()` **从分母里排除**，并且要在输出里说出来。
+
+    抽成独立函数不只是为了整洁：它原本内联在 `main()` 里，**根本没法被单独测试**
+    （同一个毛病见 #33 的成本分解切段）。
+    """
+    sc = SCENARIOS.get(fault)
+    label = CAUSE_LABELS.get(fault)
+    if sc is None or label is None:
+        return NA
+    # 多故障场景（F8）用它声明的那个 Cause；单故障场景用它自己的 keyword_groups
+    # 现场构造一个 —— 因为场景定义里可能没把这条 Cause 单独列出来。
+    cause_obj = next((c for c in sc.required_causes if c.name == label), None) or Cause(
+        name=label, keyword_groups=sc.keyword_groups
+    )
+    return keyword_verdict(text, cause_obj)
+
+
+def agreement_summary(cases: list[dict]) -> tuple[int, int, int]:
+    """(一致数, 可比数, 被排除的条数)。
+
+    ⚠️ `NA` **不进分母** —— 否则"没算出来"会被当成"判得不一致"（P7）。
+    """
+    comparable = [c for c in cases if c["kw"] != NA]
+    agree = sum(1 for c in comparable if c["kw"] == c["verdicts"][0])
+    return agree, len(comparable), len(cases) - len(comparable)
 
 
 def load_attempts() -> list[dict]:
@@ -113,21 +149,12 @@ def main() -> int:
     per_case: list[dict] = []
 
     for item in picked:
-        cause_label = CAUSE_LABEL.get(item["fault"])
+        cause_label = CAUSE_LABELS.get(item["fault"])
         if cause_label is None:
             continue
-        # 关键词侧：必须**任何场景**都能算出同口径的判定，否则"一致率"里
-        # 会混进一堆 "n/a"，看起来像分歧、其实只是没算出来。
-        #   多故障场景（F8）→ 用它声明的那个 Cause
-        #   单故障场景       → 用它自己的 keyword_groups 现场构造一个 Cause
-        sc = SCENARIOS.get(item["fault"])
-        if sc is None:
-            kw = "n/a"
-        else:
-            cause_obj = next(
-                (c for c in sc.required_causes if c.name == cause_label), None
-            ) or Cause(name=cause_label, keyword_groups=sc.keyword_groups)
-            kw = keyword_verdict(item["text"], cause_obj)
+        # 关键词侧的判定：**任何已知场景都要能算出来**，不许退化成 n/a，
+        # 否则"一致率"里会混进一堆"没算出来"，看起来像分歧（P7）。
+        kw = keyword_side(item["fault"], item["text"])
 
         verdicts: list[str] = []
         for _ in range(args.reps):
@@ -142,21 +169,31 @@ def main() -> int:
                          "verdicts": verdicts, "stable": stable})
 
         mark = "✅" if stable else "⚠️"
-        flag = "" if (kw == verdicts[0]) else "   ← 与关键词判定不一致"
+        if kw == NA:
+            flag = "   ← 关键词侧**算不出来**（已从一致率分母里排除）"
+        elif kw == verdicts[0]:
+            flag = ""
+        else:
+            flag = "   ← 与关键词判定不一致"
         print(f"  {mark} {item['agent']:<8} {item['fault']} 第{item['round']}轮  [{cause_label}]")
         print(f"        关键词：{kw}　裁判：{verdicts}　{'稳定' if stable else '**不稳定**'}{flag}")
 
-    agree = sum(1 for c in per_case if c["kw"] == c["verdicts"][0])
+    agree, comparable, na_n = agreement_summary(per_case)
     print()
     print(f"  自一致性：{consistent}/{len(per_case)} 条在 {args.reps} 次判定里结论完全一致")
-    print(f"  与关键词判定一致：{agree}/{len(per_case)}")
+    print(f"  与关键词判定一致：{agree}/{comparable}", end="")
+    if na_n:
+        print(f"　（另有 {na_n} 条关键词侧算不出来，**已从分母排除** —— "
+              f"它们不是分歧，见 P7）")
+    else:
+        print()
     print(f"  总成本：¥{total_cost:.6f}")
 
     print()
     print("── 不一致的样本（**必须人工读原文判谁对**，不许拿关键词当标准答案）──")
     shown = 0
     for c in per_case:
-        if c["kw"] != c["verdicts"][0]:
+        if c["kw"] != NA and c["kw"] != c["verdicts"][0]:
             shown += 1
             print(f"  · {c['agent']} {c['fault']} 第{c['round']}轮 [{c['cause']}]")
             print(f"      关键词 {c['kw']} / 裁判 {c['verdicts'][0]}")

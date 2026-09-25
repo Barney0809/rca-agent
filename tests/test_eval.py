@@ -1382,3 +1382,61 @@ def test_guessed_dates_are_not_counted_as_holidays():
     assert is_peak_hour(datetime(2026, 9, 28, 10, 0)) is True, (
         "09-28 未经核实，必须按工作日（峰时）算 —— 否则成本被低估"
     )
+
+
+# --------------------------------------------------------------------------- #
+# P7 / #43：裁判审计脚本的两条不变量
+# --------------------------------------------------------------------------- #
+def test_judge_audit_reuses_the_single_cause_label_table():
+    """#43：原因标签**只能有一份**（`eval/scenarios.py::CAUSE_LABELS`）。
+
+    `eval/judge_audit.py` 曾经自己抄了一份，而 `scenarios.py` 那段注释恰好写着：
+    "都从这里取。各自写一份的话，两边迟早走散 ——
+     而'两份判定不一致'这种 bug 极难发现（本项目已经栽过一次）。"
+
+    ⇒ 断言**是同一个对象**，不是"内容暂时相同的副本"：副本会随时间走散。
+    """
+    from eval import judge_audit
+    from eval.scenarios import CAUSE_LABELS
+
+    assert judge_audit.CAUSE_LABELS is CAUSE_LABELS, "抄了一份副本 —— 两边迟早走散"
+    assert not hasattr(judge_audit, "CAUSE_LABEL"), "旧的副本又回来了"
+
+
+def test_judge_audit_keyword_side_never_gives_up_on_a_known_scenario():
+    """P7：**能算就必须算出来**，不许用 `n/a` 冒充"算过了"。"""
+    from eval import judge_audit
+    from eval.scenarios import CAUSE_LABELS, SCENARIOS
+
+    text = "根因是外部风控变慢：order 侧延迟升高，而 inventory 与 payment 自身耗时正常。"
+
+    checked = 0
+    for fid in SCENARIOS:
+        if fid not in CAUSE_LABELS:
+            continue
+        checked += 1
+        got = judge_audit.keyword_side(fid, text)
+        assert got != judge_audit.NA, f"{fid} 的关键词判定退化成 n/a 了"
+        assert got in {"asserted", "dismissed", "absent"}
+    assert checked >= 7, f"只检查了 {checked} 个场景，场景表可能变了"
+
+
+def test_judge_audit_excludes_unscorable_cases_from_the_rate():
+    """P7 的核心：**`n/a` 不许进分母** ——「没算出来」和「判得不一致」是两件事。
+
+    现场：审计脚本把算不出来的行输出成 `n/a`，又把它计进「不一致」，
+    于是得到一份误导性的一致率（看着像裁判与关键词分歧，其实只是没算出来）。
+    """
+    from eval import judge_audit
+
+    cases = [
+        {"kw": "asserted", "verdicts": ["asserted"]},          # 一致
+        {"kw": "asserted", "verdicts": ["absent"]},            # 真分歧
+        {"kw": judge_audit.NA, "verdicts": ["asserted"]},      # 算不出来 → 必须排除
+        {"kw": judge_audit.NA, "verdicts": ["absent"]},        # 同上
+    ]
+    agree, comparable, na_n = judge_audit.agreement_summary(cases)
+
+    assert (agree, comparable, na_n) == (1, 2, 2), (
+        f"分母里混进了算不出来的行：agree={agree} comparable={comparable} na={na_n}"
+    )

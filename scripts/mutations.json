@@ -1004,5 +1004,47 @@
         ]
       }
     ]
+  },
+  "judge_audit_integrity": {
+    "harness_log": [
+      "#43",
+      "P7"
+    ],
+    "why": "#43: eval/judge_audit.py kept its own copy of the cause-label table, while the copy in eval/scenarios.py carries a comment saying 'take it from here; if each file writes its own, the two WILL drift apart -- and a bug where two implementations disagree is exceptionally hard to notice (this project has already been bitten once)'. So I duplicated precisely the thing that comment warns about, and the two copies happened to still agree -- the most dangerous state, because nothing looks wrong yet. P7 is the companion defect in the same script: it printed 'n/a' for cases it could not score and then counted those rows as DISAGREEMENTS, producing a misleading agreement rate; and because the logic lived inline in main() it could not be tested at all (same mistake as #33). Both are now separate functions with cases that turn red.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "audit1-copy-the-label-table",
+        "desc": "#43: make a private copy of CAUSE_LABELS instead of using the shared object. The copies agree today -- which is exactly the dangerous state the comment warns about.",
+        "file": "eval/judge_audit.py",
+        "find": "NA = \"n/a\"",
+        "replace": "NA = \"n/a\"\nCAUSE_LABELS = dict(CAUSE_LABELS)  # a private copy -- the very thing #43 was about",
+        "expect_red": [
+          "tests/test_eval.py::test_judge_audit_reuses_the_single_cause_label_table"
+        ]
+      },
+      {
+        "id": "audit2-count-unscorable-rows-as-disagreement",
+        "desc": "P7: put the unscorable rows back into the denominator, so 'could not compute' is silently reported as 'the two rulers disagree'.",
+        "file": "eval/judge_audit.py",
+        "find": "    comparable = [c for c in cases if c[\"kw\"] != NA]",
+        "replace": "    comparable = list(cases)",
+        "expect_red": [
+          "tests/test_eval.py::test_judge_audit_excludes_unscorable_cases_from_the_rate"
+        ]
+      },
+      {
+        "id": "audit3-give-up-on-every-scenario",
+        "desc": "P7: make the keyword side return n/a for everything -- the original 'give up silently' behaviour. Every row then leaves the denominator and the agreement rate is computed over nothing.",
+        "file": "eval/judge_audit.py",
+        "find": "    if sc is None or label is None:",
+        "replace": "    if True:",
+        "expect_red": [
+          "tests/test_eval.py::test_judge_audit_keyword_side_never_gives_up_on_a_known_scenario"
+        ]
+      }
+    ]
   }
 }
