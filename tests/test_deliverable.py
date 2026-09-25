@@ -305,6 +305,53 @@ def test_demo_seal_table_reports_status_so_human_only_items_are_not_oversold() -
         assert f"<code>{i}</code>" in page
 
 
+def test_evidence_paths_are_derived_from_the_gitignore_negations() -> None:
+    """"哪份运行产物算证据"只能有**一个定义处**：`.gitignore` 的反选规则。
+
+    变异检查工具要按这个清单把证据一起拷进副本 —— 否则副本不再是项目的忠实拷贝，
+    控制组会因为「存档缺失」变红（#38 的现场：工具自己报 "the copy itself is broken"）。
+
+    这里同时锁住那条容易写错的分支：**只反选父目录的规则要被跳过**
+    （`!runs/_eval/` 是 `!runs/_eval/<某次运行>/` 的前缀，照抄会把整个 runs/ 又拷一遍）。
+    """
+    from scripts.mutate_check import evidence_paths
+
+    got = evidence_paths()
+
+    assert "runs/_eval/" not in got, "父目录级的反选被当成证据了（会把整个 runs/ 拷一份）"
+    assert "runs/_eval/baseline-20260925-085629/" in got
+    assert "runs/_eval/multi-20260925-112648/" in got
+    assert "runs/_recordings/record-deepseek-flash.ndjson" in got
+
+
+def test_frozen_evidence_is_present_and_not_ignored() -> None:
+    """**定稿数字的证据必须随仓库提交**（AC-12：陌生人克隆要能自己核对）。
+
+    #38：`runs/` 整目录被 gitignore，于是"本页由存档生成"只在我这台机器上成立 ——
+    陌生人克隆后生成器直接报"找不到存档"，而上面那条"可逐字节重放"的用例
+    只会 `pytest.skip`（**skip 也是绿**，假绿）。
+
+    这里守两个不变量：证据在磁盘上、且 `.gitignore` 里**显式反选**了它们。
+    （只需读文件、不用调 git —— 与仓库里其它"离线结构守卫"同一路子。）
+    """
+    for name in ("baseline-20260925-085629", "multi-20260925-112648"):
+        p = ROOT / "runs" / "_eval" / name / "results.json"
+        assert p.exists(), f"定稿证据缺失：{p}（数字就没有可核对的来源了）"
+
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    lines = [ln.strip() for ln in ignored.splitlines()]
+
+    # 父目录整体被排除时 git 不会再看反选规则 ⇒ 必须是 `runs/*` 而不是 `runs/`
+    assert "runs/*" in lines, "`runs/` 写成了整目录排除，下面的反选会失效"
+    assert "runs/" not in lines, "`runs/` 会把证据一起排除掉"
+    for name in ("baseline-20260925-085629", "multi-20260925-112648"):
+        assert f"!runs/_eval/{name}/" in lines, f"{name} 的证据没有被反选进仓库"
+    assert "!runs/_recordings/record-deepseek-flash.ndjson" in lines, "录制也没进仓库"
+
+    # 反选必须排在排除规则**之后**（gitignore 是后者优先）
+    assert lines.index("runs/*") < lines.index("!runs/_eval/"), "反选规则的位置不对"
+
+
 def test_committed_demo_page_is_reproducible_from_the_archives() -> None:
     """**"本页由存档生成"必须真的可复现。**
 

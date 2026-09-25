@@ -861,7 +861,8 @@
   },
   "deliverable_artifact_integrity": {
     "harness_log": [
-      "#37"
+      "#37",
+      "#38"
     ],
     "why": "#37: the public demo page claims 'generated from the archives', and that claim was false in four ways at once: (1) the tariff cell rendered EMPTY when an archive predates the pricing_tier field -- a blank reads as 'nothing to see', while what it actually means is 'was not recorded'; (2) the sample description ('7 scenarios x 3 rounds') was typed by hand rather than derived, so any re-run would have left the page lying; (3) the trace caption was hardcoded to F8's description even though the displayed scenario can fall back to another fault; (4) the seal checklist listed 50 entries with P5..P9 duplicated, because the parser also swallowed a later detail table -- and it presented human-only process defects as if mutation testing had proven them. My own hand audit had 'verified' the page by comparing it against the same parser, which is a tautology (50 = 50 proves nothing).",
     "tests": [
@@ -916,6 +917,16 @@
         "replace": "        if not re.fullmatch(r\"#\\d+|P\\d+\", head):",
         "expect_red": [
           "tests/test_deliverable.py::test_demo_seal_table_ignores_other_tables_in_the_log"
+        ]
+      },
+      {
+        "id": "demo6-drop-the-evidence-negation",
+        "desc": "#38: remove the negation that keeps the frozen-number archives inside the repository, so a fresh clone can neither regenerate the page nor check any headline number.",
+        "file": ".gitignore",
+        "find": "!runs/_eval/multi-20260925-112648/\n",
+        "replace": "",
+        "expect_red": [
+          "tests/test_deliverable.py::test_frozen_evidence_is_present_and_not_ignored"
         ]
       }
     ]

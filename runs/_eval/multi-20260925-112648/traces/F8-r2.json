@@ -1,0 +1,675 @@
+[
+  {
+    "phase": "investigate",
+    "role": "logs",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"ERROR\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"WARNING\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms\n[order] INFO ×8049 07:23:49→07:26:18  收到下单请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-25 07:23:49.633 INFO  [order] trace=29633c78cf7 | 收到下单请求 order_id=ORD-1F9565B7D1 sku=SKU-002 qty=1\n[inventory] INFO ×8049 07:23:49→07:26:18  收到库存预留请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-25 07:23:49.776 INFO  [inventory] trace=29640ffc347 | 收到库存预留请求 order_id=ORD-A6A3C2D392 sku=SKU-001 qty=1\n[inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 200 OK\"\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms\n[inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms\n[order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 200 OK\"\n[order] INFO ×8049 07:23:50→07:26:19  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660e8b627 | 下单成功 order_id=ORD-9075FFEBAC 耗时=1032ms",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"service\": \"payment\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"风控\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"失败\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"超时\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"重试\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"service\": \"order\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[order] INFO ×8049 07:23:49→07:26:18  收到下单请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-25 07:23:49.633 INFO  [order] trace=29633c78cf7 | 收到下单请求 order_id=ORD-1F9565B7D1 sku=SKU-002 qty=1\n[order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 200 OK\"\n[order] INFO ×8049 07:23:50→07:26:19  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660e8b627 | 下单成功 order_id=ORD-9075FFEBAC 耗时=1032ms",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"service\": \"inventory\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[inventory] INFO ×8049 07:23:49→07:26:18  收到库存预留请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-25 07:23:49.776 INFO  [inventory] trace=29640ffc347 | 收到库存预留请求 order_id=ORD-A6A3C2D392 sku=SKU-001 qty=1\n[inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 200 OK\"\n[inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"缓慢\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"降级\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"风控响应\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"level\": \"INFO\", \"service\": \"payment\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms",
+        "ok": true
+      },
+      {
+        "step": 6,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"error\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      },
+      {
+        "step": 6,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"拒绝\", \"limit\": 40}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "phase": "investigate",
+    "role": "metrics",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 8049\n  leak_bytes_total = 4.22e+09\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"create_order\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 0\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 8049\n  downstream_exhausted_total{target=\"payment\"} = 0\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 0\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"reserve\"} = 8049\n  stock_level{sku=\"SKU-001\"} = 980600\n  stock_level{sku=\"SKU-002\"} = 982714\n  stock_level{sku=\"SKU-003\"} = 982757",
+        "ok": true
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 0\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"charge\"} = 8049\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  leak_bytes_total = 4.22e+09",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"duration\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"cost\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"time\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  pool_in_flight = 0\n  pool_limit = 64",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"stock\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  stock_level{sku=\"SKU-001\"} = 980600\n  stock_level{sku=\"SKU-002\"} = 982714\n  stock_level{sku=\"SKU-003\"} = 982757",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  pool_in_flight = 0\n  pool_limit = 64",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"risk\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"error\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"memory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 8049\n  leak_bytes_total = 4.22e+09\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"create_order\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 0\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 8049\n  downstream_exhausted_total{target=\"payment\"} = 0\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 0\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"reserve\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 0\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"charge\"} = 8049\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"downstream\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"downstream\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 0\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 8049\n  downstream_exhausted_total{target=\"payment\"} = 0\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 0",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"downstream\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"request\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"create_order\"} = 8049",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\", \"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"exhausted\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"stock\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\", \"keyword\": \"stock\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。",
+        "ok": true
+      },
+      {
+        "step": 5,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"in_flight\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  pool_in_flight = 0",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "phase": "investigate",
+    "role": "change",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"order\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"inventory\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"payment\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 2,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"风控\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"timeout\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"retry\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"limit\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      },
+      {
+        "step": 3,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"risk\"}",
+        "result": "（本时段没有任何配置变更记录）",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "phase": "cross_exam",
+    "role": "logs",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"ERROR\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 1,
+        "tool": "query_logs",
+        "args": "{\"level\": \"WARNING\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms"
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"service\": \"order\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[order] INFO ×8049 07:23:49→07:26:18  收到下单请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-25 07:23:49.633 INFO  [order] trace=29633c78cf7 | 收到下单请求 order_id=ORD-1F9565B7D1 sku=SKU-002 qty=1\n[order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 200 OK\"\n[order] INFO ×8049 07:23:50→07:26:19  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660e8b627 | 下单成功 order_id=ORD-9075FFEBAC 耗时=1032ms"
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"service\": \"inventory\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[inventory] INFO ×8049 07:23:49→07:26:18  收到库存预留请求 order_id=ORD-<ID> sku=SKU-<N> qty=<N>\n    例：2026-09-25 07:23:49.776 INFO  [inventory] trace=29640ffc347 | 收到库存预留请求 order_id=ORD-A6A3C2D392 sku=SKU-001 qty=1\n[inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 200 OK\"\n[inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms"
+      },
+      {
+        "step": 2,
+        "tool": "query_logs",
+        "args": "{\"service\": \"payment\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"超时\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"失败\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"重试\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 3,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"风控\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms"
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"降级\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"拒绝\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"leak\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 4,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"内存\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"缓慢\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms"
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"耗时\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[payment] WARNING ×8049 07:23:50→07:26:18  外部风控响应缓慢 耗时=<N>ms\n    例：2026-09-25 07:23:50.671 WARNING [payment] trace=29637b6c5f6 | 外部风控响应缓慢 耗时=801ms\n[payment] INFO ×8049 07:23:50→07:26:19  扣款成功 order_id=ORD-<ID> 金额=<N>分 风控耗时=<N>ms 总耗时=<N>ms\n    例：2026-09-25 07:23:50.687 INFO  [payment] trace=29660e8b627 | 扣款成功 order_id=ORD-9075FFEBAC 金额=1999分 风控耗时=800.5ms 总耗时=818ms\n[inventory] INFO ×8049 07:23:50→07:26:19  库存预留成功 order_id=ORD-<ID> sku=SKU-<N> 剩余=<N> 耗时=<N>ms\n    例：2026-09-25 07:23:50.688 INFO  [inventory] trace=29660e8b627 | 库存预留成功 order_id=ORD-9075FFEBAC sku=SKU-003 剩余=985977 耗时=899ms\n[order] INFO ×8049 07:23:50→07:26:19  下单成功 order_id=ORD-<ID> 耗时=<N>ms\n    例：2026-09-25 07:23:50.692 INFO  [order] trace=29660e8b627 | 下单成功 order_id=ORD-9075FFEBAC 耗时=1032ms"
+      },
+      {
+        "step": 5,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"OK\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n[inventory] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://payment:<N>/charge \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.687 INFO  HTTP Request: POST http://payment:8000/charge \"HTTP/1.1 200 OK\"\n[order] INFO ×8049 07:23:50→07:26:19  HTTP Request: POST http://inventory:<N>/reserve \"HTTP/<N> <N> OK\"\n    例：2026-09-25 07:23:50.689 INFO  HTTP Request: POST http://inventory:8000/reserve \"HTTP/1.1 200 OK\""
+      },
+      {
+        "step": 6,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"error\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      },
+      {
+        "step": 6,
+        "tool": "query_logs",
+        "args": "{\"keyword\": \"risk\", \"limit\": 50}",
+        "result": "# 日志概览  窗口 07:23:49–07:26:19\n按服务：inventory=24147  order=24147  payment=16098\n按级别：INFO=56343  WARNING=8049\n\n## 异常时间线\n  07:23  W499\n  07:24  W3267\n  07:25  W3278\n  07:26  W1005\n\n## 消息模板\n（没有匹配的日志模板）"
+      }
+    ]
+  },
+  {
+    "phase": "cross_exam",
+    "role": "metrics",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  downstream_calls_total{result=\"ok\",target=\"inventory\"} = 8049\n  leak_bytes_total = 4.22e+09\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"create_order\"} = 8049"
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"payment\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 0\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"charge\"} = 8049\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 8049"
+      },
+      {
+        "step": 1,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"inventory\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 0\n  downstream_calls_total{result=\"ok\",target=\"payment\"} = 8049\n  downstream_exhausted_total{target=\"payment\"} = 0\n  pool_in_flight = 0\n  pool_limit = 64\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 0\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"reserve\"} = 8049\n  stock_level{sku=\"SKU-001\"} = 980600\n  stock_level{sku=\"SKU-002\"} = 982714\n  stock_level{sku=\"SKU-003\"} = 982757"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"latency\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"duration\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"cost\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"time\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"leak\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  leak_bytes_total = 4.22e+09"
+      },
+      {
+        "step": 2,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"stock\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  stock_level{sku=\"SKU-001\"} = 980600\n  stock_level{sku=\"SKU-002\"} = 982714\n  stock_level{sku=\"SKU-003\"} = 982757"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"pool\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  pool_in_flight = 0\n  pool_limit = 64\n[order]\n  pool_in_flight = 0\n  pool_limit = 64\n[payment]\n  pool_in_flight = 0\n  pool_limit = 64"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"error\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_calls_total{result=\"error\",target=\"payment\"} = 0\n[payment]\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"failed\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 0\n[payment]\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 0"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"exhausted\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  downstream_exhausted_total{target=\"payment\"} = 0"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"risk\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[payment]\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 8049"
+      },
+      {
+        "step": 3,
+        "tool": "query_metrics",
+        "args": "{\"keyword\": \"requests\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[inventory]\n  requests_total{endpoint=\"reserve\",result=\"downstream_failed\"} = 0\n  requests_total{endpoint=\"reserve\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"reserve\"} = 8049\n[order]\n  requests_total{endpoint=\"create_order\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"create_order\"} = 8049\n[payment]\n  requests_total{endpoint=\"charge\",result=\"external_failed\"} = 0\n  requests_total{endpoint=\"charge\",result=\"ok\"} = 8049\n  requests_total{endpoint=\"charge\"} = 8049\n  requests_total{endpoint=\"risk_control\",result=\"error\"} = 0\n  requests_total{endpoint=\"risk_control\",result=\"ok\"} = 8049"
+      },
+      {
+        "step": 4,
+        "tool": "query_metrics",
+        "args": "{\"service\": \"order\", \"keyword\": \"leak_bytes_total\"}",
+        "result": "说明：以下计数器为**本时段窗口内的增量**，仪表为时段结束时的瞬时值。\n[order]\n  leak_bytes_total = 4.22e+09"
+      }
+    ]
+  },
+  {
+    "phase": "cross_exam",
+    "role": "change",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"payment\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"risk\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"timeout\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"order\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"inventory\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"limit\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      },
+      {
+        "step": 1,
+        "tool": "get_changes",
+        "args": "{\"keyword\": \"retry\"}",
+        "result": "（本时段没有任何配置变更记录）"
+      }
+    ]
+  }
+]

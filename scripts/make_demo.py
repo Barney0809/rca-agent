@@ -295,7 +295,9 @@ def build() -> str:
 <h1>RCA-Agent · 公开实例</h1>
 <p class="lead">用确定性机制约束 LLM 的<strong>判断</strong>与<strong>行动</strong> ——
 一个把「测量本身可信」当成第一目标的故障根因分析实验。</p>
-<p class="dim">本页由存档生成（<code>scripts/make_demo.py</code>），不是截图。</p>
+<p class="dim">本页由存档生成（<code>scripts/make_demo.py</code>），不是截图 ——
+而<strong>存档与录制也随仓库提交</strong>（<code>runs/_eval/</code>），
+所以重跑一次生成器就能把这一页**逐字节复现**出来：不需要 API key，不花一分钱。</p>
 
 <h2>一、一句话结论</h2>
 <blockquote>

@@ -152,6 +152,28 @@ def load_spec() -> dict:
     return json.loads(SPEC_PATH.read_text(encoding="utf-8"))
 
 
+def evidence_paths() -> list[str]:
+    """Paths under runs/ that are COMMITTED EVIDENCE, read from .gitignore.
+
+    `runs` is excluded from the copy (the code under test writes there), but a few
+    archives are deliberately kept in the repository: they are the source of every
+    frozen number (#38). A copy without them is not a faithful copy of the project,
+    and the CONTROL run goes red for a reason that has nothing to do with the mutant
+    -- the tool then reports "the copy itself is broken".
+
+    Deriving the list from the `.gitignore` negations keeps the definition in ONE
+    place: change the repository policy and the copy follows, with no silent gap.
+    Negations that merely re-include a parent directory (a prefix of another
+    negation) are skipped, otherwise we would copy all of runs/ again.
+    """
+    negs = [
+        line.strip()[1:]
+        for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("!runs/")
+    ]
+    return [p for p in negs if not any(o != p and o.startswith(p) for o in negs)]
+
+
 def make_copy(slug: str) -> Path:
     """把当前项目复制一份到 <项目同级>/rca-mutants/<slug>-<时间戳>/。
 
@@ -162,6 +184,15 @@ def make_copy(slug: str) -> Path:
     shutil.copytree(ROOT, dest, ignore=COPY_IGNORE, dirs_exist_ok=True)
     # 被测代码会往 runs/ 写测试工作区，给它留个空目录
     (dest / "runs").mkdir(exist_ok=True)
+    # ...but the committed evidence under runs/ must come along (#38).
+    for rel in evidence_paths():
+        src = ROOT / rel
+        dst = dest / rel
+        if src.is_dir():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        elif src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
     return dest
 
 
