@@ -1,5 +1,9 @@
 # rca-agent
 
+[![ci](https://github.com/Barney0809/rca-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Barney0809/rca-agent/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.14-3776ab.svg)](https://www.python.org/)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 > **LLM 的「自觉」不可靠 —— 所以用确定性的工程机制，同时约束它的判断和它的行动。**
 
 一个**可复现**的多 Agent 故障根因分析（RCA）实验：

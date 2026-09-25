@@ -92,5 +92,9 @@ jobs:
         run: uv run pytest --color=no tests/test_world.py
 
       - name: dump container logs on failure
-        if: failure()
+        # ⚠️ 原来这里是 `if: failure()`，我曾在它前面**又插一行 `if: always()`** ——
+        #    同一个 mapping 两个 `if:` 键 ⇒ GitHub 直接拒绝整个文件（两个 job 都不启动），
+        #    而 PyYAML 静默通过。现在改成 always()（本意就是"无论成败都留日志"），
+        #    并加了守卫：tests/test_ci_workflow.py 用严格 loader 拦重复键。
+        if: always()
         run: docker compose logs --no-log-prefix
