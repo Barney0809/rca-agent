@@ -800,3 +800,81 @@ def test_f8_declares_both_causes_so_the_axes_are_not_vacuous():
     # 其他场景不该有原因清单（它们只有一个原因）
     others = [fid for fid, s in SCENARIOS.items() if s.required_causes and fid != "F8"]
     assert not others, f"这些场景不该声明 required_causes：{others}"
+
+# ================================================================
+# #28 关键词侧的三分类：判据是**合取**，就不能用**析取**判断「提没提过」
+# ================================================================
+#
+# 真实 bug（D10 第二步，被审计脚本当场抓出来）：
+#
+#   `keyword_verdict` 用「**任意一组**出现关键词」判断「提到过」，
+#   而一个原因的判据是**所有组**的合取。后果：
+#
+#     F4 的判据 =（重试/retry）+（inventory/库存）
+#     一段**从没提过重试配置**的答案，因为传播链写了
+#     「payment→inventory→order」，就含了 `inventory` ——
+#     于是被判成「提到了但否掉了」(dismissed)，而真相是 **absent**。
+#
+#   ⇒ 一句话：**判据是合取，就不能用析取去判断「它提没提过」。**
+#
+# 为什么值得单独立用例：这个错误**不会报错、不会崩**，
+# 它只是让"一致率"这类对比数字**悄悄失真** ——
+# 当时审计显示 6/8 一致，看着像"裁判与词表有分歧"，
+# 其实是我的对比函数自己错了。
+
+
+def _f4_cause():
+    from eval.scenarios import SCENARIOS, Cause
+
+    f4 = SCENARIOS["F4"]
+    return Cause(name="重试配置漂移", keyword_groups=f4.keyword_groups)
+
+
+def test_regression_28_absent_needs_every_group_missing_not_just_one():
+    """核心：**只命中了判据里的一组**，结论必须是 absent，不是 dismissed。
+
+    这段原文来自真实存档（baseline F4 第1轮），它压根没提重试配置 ——
+    但传播链里写了 `inventory`。按析取判断就会误判成 dismissed。
+    """
+    from eval.scenarios import keyword_verdict
+
+    text = (
+        "payment 服务调用的外部风控不可用（risk control unavailable），"
+        "导致扣款失败，故障沿 payment→inventory→order 逐层向上传播。"
+    )
+    assert keyword_verdict(text, _f4_cause()) == "absent", (
+        "这段提到了 inventory（判据里的一组），但**从没提过重试**（另一组）；"
+        "判据是合取，所以它属于「根本没提」，不是「提到了但否掉了」"
+    )
+
+
+def test_regression_28_dismissed_when_all_groups_present_but_denied():
+    """正向对照：两组都出现过、且被否掉 → dismissed。"""
+    from eval.scenarios import keyword_verdict
+
+    text = "外部风控不可用导致失败；inventory 的重试次数变更只是放大了错误量，并非根因。"
+    assert keyword_verdict(text, _f4_cause()) == "dismissed"
+
+
+def test_regression_28_asserted_path_still_works():
+    """正向对照：正常主张 → asserted（防止「一律判 absent」的假绿）。"""
+    from eval.scenarios import keyword_verdict
+
+    assert keyword_verdict("根因是 inventory 的重试次数被从 1 改为 5。", _f4_cause()) == "asserted"
+
+
+def test_regression_28_the_three_way_split_is_actually_reachable():
+    """元测试：三种结局都必须能被真实产生。
+
+    否则这个三分类可能退化成"永远只返回两种"，而用例仍然全绿 ——
+    那正是 #28 这类"数字悄悄失真"的温床。
+    """
+    from eval.scenarios import keyword_verdict
+
+    cause = _f4_cause()
+    got = {
+        keyword_verdict("根因是 inventory 的重试次数被从 1 改为 5。", cause),
+        keyword_verdict("外部风控不可用；inventory 的重试次数变更只是放大了错误量，并非根因。", cause),
+        keyword_verdict("payment 调用的外部风控不可用，故障沿 payment→inventory→order 传播。", cause),
+    }
+    assert got == {"asserted", "dismissed", "absent"}, f"三种结局没被全覆盖：{got}"

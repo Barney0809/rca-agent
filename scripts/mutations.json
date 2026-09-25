@@ -584,5 +584,26 @@
         ]
       }
     ]
+  },
+  "keyword_verdict_conjunction": {
+    "harness_log": [
+      "#28"
+    ],
+    "why": "#28: the keyword side's three-way verdict decided 'was it mentioned at all' with ANY-group matching, while a cause's criterion is ALL-groups (a conjunction). So an answer that never mentioned the retry config counted as 'mentioned but denied' merely because its propagation chain contained the word 'inventory'. Silent -- it only distorted the agreement numbers used to compare two rulers.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "kv-a-any-group-means-mentioned",
+        "desc": "Revert to ANY-group matching for 'was it mentioned'. An answer that only touches one group of a conjunction criterion is then misread as 'mentioned but dismissed' instead of 'absent'.",
+        "file": "eval/scenarios.py",
+        "find": "    return \"dismissed\" if all(present) else \"absent\"",
+        "replace": "    return \"dismissed\" if any(present) else \"absent\"",
+        "expect_red": [
+          "tests/test_eval.py::test_regression_28_absent_needs_every_group_missing_not_just_one"
+        ]
+      }
+    ]
   }
 }
