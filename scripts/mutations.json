@@ -1298,5 +1298,66 @@
         ]
       }
     ]
+  },
+  "replay_pack_integrity": {
+    "harness_log": [
+      "#53"
+    ],
+    "why": "#53: --mode replay had NEVER actually run to completion, yet 'a stranger can replay for free' was written into the docs as a shipped capability. The real cause is structural: the recording key is sha256(tag+model+messages) and the tag embeds the scenario directory name (a fault-injection timestamp), so any fresh set of scenario dirs misses on the very first call. Replay therefore needs the recording AND the same scenario dirs (same names, same bytes). Five invariants make that checkable instead of aspirational: (a) the gzipped log a pack ships must be byte-equivalent to the plain log, or the key changes and replay misses while looking like a model/code problem; (b) a tampered pack file must be refused; (c) a missing pack file must be refused, not turned into a confusing crash; (d) RCA_REPLAY_ROOT must really move the data root; (e) a replay run must never be published as a measurement -- replay is identical by construction, so publishing it silently replaces the page's accuracy/cost with a re-reading.",
+    "tests": [
+      "tests/test_replay_pack.py"
+    ],
+    "mutations": [
+      {
+        "id": "replay-a-gz-log-not-equivalent-to-plain",
+        "desc": "Give up on the gzipped log and return nothing, so a pack-loaded scenario has empty logs -- the key changes and replay misses while the report blames the model.",
+        "file": "src/rca/telemetry/collect.py",
+        "find": "            with gzip.open(packed, \"rt\", encoding=\"utf-8\", errors=\"replace\") as fh:\n                return fh.read()",
+        "replace": "            return \"\"",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_gz_log_is_byte_equivalent_to_plain"
+        ]
+      },
+      {
+        "id": "replay-b-tamper-not-detected",
+        "desc": "Skip the hash comparison, so a modified pack passes verification and then misses mid-run -- the exact confusion (broken pack vs. genuine mismatch) the self-check exists to prevent.",
+        "file": "eval/runner.py",
+        "find": "        if got != want:",
+        "replace": "        if False:",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_verify_replay_pack_rejects_tampered_file"
+        ]
+      },
+      {
+        "id": "replay-c-missing-file-not-reported",
+        "desc": "Drop the missing-file report, so an incomplete pack is not refused -- it crashes deep inside the hash helper instead of saying which file is gone.",
+        "file": "eval/runner.py",
+        "find": "        if not p.exists():\n            bad.append(f\"缺失 {rel}\")\n            continue",
+        "replace": "        if not p.exists():\n            pass",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_verify_replay_pack_rejects_missing_file"
+        ]
+      },
+      {
+        "id": "replay-d-data-root-ignores-env",
+        "desc": "Hardcode the data root back to runs/, so RCA_REPLAY_ROOT is documented but inert -- replay would silently read this machine's dirs and the portable pack would do nothing.",
+        "file": "eval/runner.py",
+        "find": "    raw = os.environ.get(\"RCA_REPLAY_ROOT\", \"\").strip()\n    return Path(raw) if raw else RUNS_DIR",
+        "replace": "    raw = \"\"\n    return Path(raw) if raw else RUNS_DIR",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_data_root_honours_env"
+        ]
+      },
+      {
+        "id": "replay-e-replay-run-published-as-measurement",
+        "desc": "Let the demo page pick a replay archive as 'the most complete run'. Measured: doing exactly that turned the delivered page's numbers into a re-reading and broke 'reproducible from the archives'.",
+        "file": "scripts/make_demo.py",
+        "find": "        if str(data.get(\"mode\") or \"\").strip() == \"replay\":\n            continue",
+        "replace": "        if False:\n            continue",
+        "expect_red": [
+          "tests/test_replay_pack.py::test_demo_page_never_publishes_a_replay_run"
+        ]
+      }
+    ]
   }
 }
