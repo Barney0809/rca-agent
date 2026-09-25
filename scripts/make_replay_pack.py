@@ -91,6 +91,22 @@ def _write_gz(src: Path, dst: Path) -> tuple[int, int]:
     return len(raw), dst.stat().st_size
 
 
+def _write_text_lf(src: Path, dst: Path) -> None:
+    """把文本**按 LF 换行**写进包里（2026-09-25，D20b：这是 #39 复发）。
+
+    为什么必须归一化：
+    `.gitattributes` 里是 `eol=lf`，所以 git 在克隆/检出时会把 CRLF 改成 LF。
+    而包自检比的是 **sha256**：如果清单按 CRLF 的字节算，
+    那么**本机一切正常**（磁盘上就是 CRLF），克隆里却每个文件都"内容不一致" ——
+    包对外就是坏的。实测发生过：两个 `scenario.json` 在干净克隆里对不上哈希。
+
+    ⇒ 写的时候就统一成 LF，清单自然按"克隆里拿到的字节"算。
+    """
+    text = src.read_text(encoding="utf-8", errors="replace")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(text, encoding="utf-8", newline="\n")
+
+
 def _trim_recording(src: Path, dst: Path, run_ids: set[str]) -> tuple[int, int]:
     """把录制裁到"这次打包真正会用到"的条目，返回 (保留, 丢弃)。
 
@@ -158,8 +174,7 @@ def build(
             if not src.exists():
                 continue
             dst = dst_dir / name
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(src.read_bytes())
+            _write_text_lf(src, dst)      # ⚠️ 必须 LF：见 _write_text_lf 的说明（#39 复发）
             files[str(dst.relative_to(out_dir)).replace("\\", "/")] = _sha256(dst)
 
         logs_raw = logs_gz = 0

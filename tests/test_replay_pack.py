@@ -302,3 +302,34 @@ def test_every_bundled_pack_file_is_tracked_by_git() -> None:
         + "\n  ".join(missing)
         + "\n检查 .gitignore 里 `logs/` 与 `*.ndjson` 那两条全局规则。"
     )
+
+
+# ---------------------------------------------------------------- 9) 换行符：#39 复发
+
+def test_pack_text_files_are_stored_with_lf(tmp_path: Path) -> None:
+    """包里的文本必须是 **LF**，否则克隆里每个文件都"内容不一致"。
+
+    真实事故（2026-09-25，D20b，干净克隆里才暴露）：
+    `.gitattributes` 是 `eol=lf`，git 检出时会把 CRLF 改成 LF；
+    而清单是按 **CRLF 的字节**算的 ⇒ 本机自检通过、克隆里两个 `scenario.json`
+    全部对不上哈希，包对外就是坏的。这与 #39（生成器写 CRLF）是同一个坑，
+    只是这次发生在我新建的包上。
+    """
+    from scripts import make_replay_pack
+
+    # ① 单元：源文件是 CRLF，写出来必须是 LF
+    src = tmp_path / "crlf.json"
+    src.write_bytes(b'{\r\n  "a": 1\r\n}\r\n')
+    dst = tmp_path / "out" / "crlf.json"
+    make_replay_pack._write_text_lf(src, dst)
+    raw = dst.read_bytes()
+    assert b"\r\n" not in raw, "写出来的文本里还有 CRLF —— 克隆里会和清单算不到一起"
+    assert raw == b'{\n  "a": 1\n}\n'
+
+    # ② 集成：随仓库的演示包里不许有 CRLF 文本
+    offenders = [
+        p.relative_to(PACK).as_posix()
+        for p in sorted(PACK.rglob("*"))
+        if p.is_file() and p.suffix in (".json", ".ndjson") and b"\r\n" in p.read_bytes()
+    ]
+    assert not offenders, f"包里有 CRLF 文本（克隆里会和清单对不上）：{offenders}"
