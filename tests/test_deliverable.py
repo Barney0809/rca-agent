@@ -352,43 +352,51 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     assert lines.index("runs/*") < lines.index("!runs/_eval/"), "反选规则的位置不对"
 
 
-UNBUILT_MARKERS = ("未接线", "未实现", "尚未", "计划中", "没有做")
+UNBUILT_MARKERS = ("未接线", "未实现", "尚未", "计划中", "没有做", "没真用", "未做")
 
 
-def test_readme_marks_unbuilt_layers_instead_of_presenting_them_as_built() -> None:
-    """#41：README 是仓库首页，**不许把"设计"写成"实现"**。
+def test_outward_facing_docs_mark_unbuilt_layers_instead_of_presenting_them_as_built() -> None:
+    """#41：**对外文档**（README / 总览 / 讲述稿）不许把"设计"写成"实现"。
 
     现场：架构图里写着 `Agent 层（LangGraph） │ MCP 策略执行点（独立进程）`，
     而代码里 **LangGraph 零命中、MCP 零命中、`rca.policy` 只被测试 import** ——
     三条一条都不成立。来源是我把 `docs/02` 的设计图抄进了 README，实现后来偏离了，
     而**同一个文档体系里"设计"与"实现"没有区分标记**。
 
-    规则（可机械检查）：凡 README 提到、而源码里确实没有的东西，
+    规则（可机械检查）：凡对外文档提到、而源码里确实没有的东西，
     它的**每一处出现**附近都必须带上"未接线/未实现"这类标记。
     这样"把设计写成实现"就变成了一条会变红的用例，而不是靠我下次记得。
+
+    ⚠️ 只查对外文档：`docs/02` 是**设计文档**，它本来就有权写没做的东西；
+    而 `docs/00-状态.md` 用另一种方式表达（「未接线」待办清单 + 当前事实）。
     """
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    lines = readme.splitlines()
     src = "\n".join(
         p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "src").rglob("*.py")
     )
+    docs = ("README.md", "docs/08-项目总览.md", "docs/07-面试讲述稿.md")
 
-    for label, needles in (("LangGraph", ("langgraph",)), ("MCP", ("import mcp", "from mcp"))):
-        if any(n in src for n in needles):
-            continue  # 代码里真的有，随便提
-        hits = [i for i, ln in enumerate(lines) if label in ln]
-        assert hits, f"README 里找不到 {label} 了？这条守卫的前提变了"
-        for i in hits:
-            window = "\n".join(lines[max(0, i - 2): i + 3])
-            assert any(m in window for m in UNBUILT_MARKERS), (
-                f"README 第 {i + 1} 行提到了 {label}，但源码里没有它，"
-                f"附近又没标「未接线」：{lines[i].strip()}"
-            )
+    for name in docs:
+        path = ROOT / name
+        assert path.exists(), f"对外文档不见了：{name}"
+        readme = path.read_text(encoding="utf-8")
+        lines = readme.splitlines()
 
-    assert "独立进程" not in readme, (
-        "策略执行点是 `src/rca/policy/` 里的**进程内模块**（而且尚未接到 Agent 路径）——"
-        "README 不能把它写成独立进程（#41）"
-    )
+        for label, needles in (("LangGraph", ("langgraph",)), ("MCP", ("import mcp", "from mcp"))):
+            if any(n in src for n in needles):
+                continue  # 代码里真的有，随便提
+            hits = [i for i, ln in enumerate(lines) if label in ln]
+            assert hits, f"{name} 里找不到 {label} 了？这条守卫的前提变了"
+            for i in hits:
+                window = "\n".join(lines[max(0, i - 2): i + 3])
+                assert any(m in window for m in UNBUILT_MARKERS), (
+                    f"{name} 第 {i + 1} 行提到了 {label}，但源码里没有它，"
+                    f"附近又没标「未接线」：{lines[i].strip()}"
+                )
+
+        assert "独立进程" not in readme, (
+            f"{name} 把策略执行点写成了独立进程 —— 它是 `src/rca/policy/` 里的"
+            f"**进程内模块**（而且尚未接到 Agent 路径）（#41）"
+        )
 
 
 def test_readme_does_not_duplicate_progress_or_counts() -> None:
