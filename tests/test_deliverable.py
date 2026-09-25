@@ -464,3 +464,71 @@ def test_cost_breakdown_needs_a_path(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr(sys, "argv", ["cost_breakdown.py"])
     assert cost_breakdown.main() == 2
     assert "用法" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# 六、#40：文档引用的那一次运行必须能**指名道姓地取回来**
+# --------------------------------------------------------------------------- #
+def _recording3(tmp_path: Path) -> Path:
+    """三次运行追加在一个文件里，每次的输出量都不同（便于断言取到的是哪一次）。"""
+    runs = [
+        [_rec("specialist:x", 100, hit=100, miss=10), _rec("specialist:y", 200, hit=200, miss=20),
+         _rec("coordinator", 300, hit=300, miss=30)],                      # 第 1 次：输出 600
+        [_rec("specialist:x", 5, hit=50, miss=5), _rec("coordinator", 7, hit=70, miss=7)],    # 第 2 次：12
+        [_rec("specialist:x", 1, hit=10, miss=1), _rec("coordinator", 2, hit=20, miss=2)],    # 第 3 次：3
+    ]
+    p = tmp_path / "record3.ndjson"
+    p.write_text("\n".join(json.dumps(o, ensure_ascii=False) for r in runs for o in r) + "\n",
+                 encoding="utf-8")
+    return p
+
+
+def test_cost_breakdown_can_select_an_earlier_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    """`--run 1` 取回第 1 次运行（#40：文档里的构成数字指向**那一次**，不是"最近一次"）。
+
+    ⚠️ 没有这个开关时，"文档说输出占 72.3%"是一句**复现不出来**的话：
+       录制是追加的，文件一变，"最近一次"就不再是它了。
+    """
+    p = _recording3(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cost_breakdown.py", str(p), "--run", "1"])
+
+    assert cost_breakdown.main() == 0
+    out = capsys.readouterr().out
+
+    assert "3 次调用" in out, "没有取到第 1 次运行"
+    assert "输出：600 tok" in out, f"取错运行了：\n{out}"
+    assert "第 1 次运行（文件里共 3 次）" in out, "得说清当前统计的是哪一次"
+
+
+def test_cost_breakdown_list_shows_every_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                            capsys: pytest.CaptureFixture[str]) -> None:
+    """`--list`：一次看全每次运行的调用数与构成（陌生人该先用它）。"""
+    p = _recording3(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cost_breakdown.py", str(p), "--list"])
+
+    assert cost_breakdown.main() == 0
+    out = capsys.readouterr().out
+
+    assert "共 3 次" in out
+    for k in (1, 2, 3):
+        assert f"第 {k:>2} 次" in out, f"第 {k} 次没列出来"
+
+
+def test_cost_breakdown_rejects_an_unknown_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                               capsys: pytest.CaptureFixture[str]) -> None:
+    """越界要**明确报错**，不能悄悄退化成"最近一次"（那是最坏的一种假绿）。"""
+    p = _recording3(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cost_breakdown.py", str(p), "--run", "9"])
+
+    assert cost_breakdown.main() == 2
+    assert "取不到第 9 次" in capsys.readouterr().out
+
+
+def test_cost_breakdown_rejects_a_non_integer_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    p = _recording3(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cost_breakdown.py", str(p), "--run", "abc"])
+
+    assert cost_breakdown.main() == 2
+    assert "整数" in capsys.readouterr().out

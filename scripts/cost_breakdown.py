@@ -32,13 +32,91 @@ PRICE_MISS = 1.0
 PRICE_OUT = 4.0
 
 
+def split_runs(raw: list[dict]) -> list[list[dict]]:
+    """按 `coordinator` 边界把录制切成**一次运行一段**。
+
+    一次运行的**结尾**是它自己的 `coordinator` 调用（那是最后一个环节），
+    所以第 k 次运行 = 「上一个 coordinator 之后」..「本次 coordinator」（含）。
+
+    第一版写成"从最后一个 coordinator 往后切"，那只切到 coordinator 自己 —— 又错一次（#33）。
+    一个 coordinator 都没有时，把整文件当成一次运行（不假装切开了）。
+    """
+    idx = [i for i, o in enumerate(raw) if o.get("tag") == "coordinator"]
+    if not idx:
+        return [raw]
+    out: list[list[dict]] = []
+    prev = -1
+    for i in idx:
+        out.append(raw[prev + 1: i + 1])
+        prev = i
+    return out
+
+
+def composition(seg: list[dict]) -> dict:
+    """一次运行的 token 与成本构成（按非高峰价）。"""
+    hit = miss = out = 0
+    for o in seg:
+        u = (o.get("response") or {}).get("usage") or {}
+        hit += int(u.get("prompt_cache_hit_tokens") or 0)
+        miss += int(u.get("prompt_cache_miss_tokens") or 0)
+        out += int(u.get("completion_tokens") or 0)
+    cost_hit = hit / 1e6 * PRICE_HIT
+    cost_miss = miss / 1e6 * PRICE_MISS
+    cost_out = out / 1e6 * PRICE_OUT
+    return {
+        "calls": len(seg),
+        "hit": hit,
+        "miss": miss,
+        "out": out,
+        "hit_rate": hit / max(hit + miss, 1),
+        "cost_hit": cost_hit,
+        "cost_miss": cost_miss,
+        "cost_out": cost_out,
+        "total": cost_hit + cost_miss + cost_out,
+    }
+
+
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    only_last = "--all" not in sys.argv
-    path = Path(args[0]) if args else None
+    # ---- 参数（手写解析：这个脚本刻意不引 argparse，逻辑一眼能看完）----
+    argv = sys.argv[1:]
+    positionals: list[str] = []
+    all_runs = False
+    list_runs = False
+    want_run: int | None = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--all":
+            all_runs = True
+            i += 1
+        elif a == "--list":
+            list_runs = True
+            i += 1
+        elif a == "--run" or a.startswith("--run="):
+            if a == "--run" and i + 1 < len(argv):
+                raw_val = argv[i + 1]
+                i += 2
+            elif "=" in a:
+                raw_val = a.split("=", 1)[1]
+                i += 1
+            else:
+                raw_val = ""
+                i += 1
+            try:
+                want_run = int(raw_val)
+            except ValueError:
+                print(f"❌ --run 需要一个整数，收到：{raw_val!r}")
+                return 2
+        else:
+            positionals.append(a)
+            i += 1
+
+    path = Path(positionals[0]) if positionals else None
     if path is None or not path.exists():
-        print("用法：python scripts/cost_breakdown.py <recordings.ndjson> [--all]")
+        print("用法：python scripts/cost_breakdown.py <recordings.ndjson> [--all | --run N | --list]")
         print("  默认只分析**最近一次运行**（录制文件是追加的，可能含多次）")
+        print("  --run N   指定第 N 次运行（从 1 开始；可先用 --list 看看有哪几次）")
+        print("  --list    只列出文件里每一次运行的调用数与构成")
         return 2
 
     # ⚠️ 录制文件是**追加**写入的（`Recorder` 用 mode="a"），
@@ -46,17 +124,38 @@ def main() -> int:
     #    直接按整个文件统计，会把两三次运行混在一起 —— 我就这么错过一次
     #    （harness-log #33：拿 33 次与「33+24」次比，得出假的「输出 +77%」）。
     #
-    #    一次运行的边界很好认：**每次诊断只有 1 条 `coordinator` 调用**，
-    #    所以按 coordinator 切段，取最后一段就是最近一次运行。
+    #    ⚠️ 还有一层（#40）：**文档里的构成数字指向某一次具体运行**，
+    #    而"最近一次"会随文件被追加而改变 —— 于是那个被引用的数字**复现不出来**。
+    #    所以必须有 `--run N`：让读者能指名道姓地取回文档引用过的那一次。
     raw = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    n_runs = sum(1 for o in raw if o.get("tag") == "coordinator") or 1
-    if only_last and n_runs > 1:
-        # ⚠️ 一次运行的**结尾**是它自己的 `coordinator` 调用（那是最后一个环节）。
-        #    所以第 k 次运行 = 「上一个 coordinator 之后」.. 「本次 coordinator」（含）。
-        #    第一版写成"从最后一个 coordinator 往后切"，那只切到 coordinator 自己 —— 又错一次。
-        idx = [i for i, o in enumerate(raw) if o.get("tag") == "coordinator"]
-        start = idx[-2] + 1 if len(idx) >= 2 else 0
-        raw = raw[start: idx[-1] + 1]
+    runs = split_runs(raw)
+    n_runs = len(runs)
+
+    if list_runs:
+        print("=" * 92)
+        print(f"录制文件里的运行：{path.name}　共 {n_runs} 次")
+        print("=" * 92)
+        for k, seg in enumerate(runs, 1):
+            c = composition(seg)
+            tot = max(c["total"], 1e-9)
+            print(f"  第 {k:>2} 次：{c['calls']:>3} 次调用　命中率 {c['hit_rate']:5.1%}　"
+                  f"构成 命中{c['cost_hit'] / tot:5.1%} / 未命中{c['cost_miss'] / tot:5.1%} / "
+                  f"输出{c['cost_out'] / tot:5.1%}　¥{c['total']:.4f}")
+        print("  用法：`--run N` 取其中一次；不加参数则取最后一次。")
+        return 0
+
+    if all_runs:
+        raw = [o for seg in runs for o in seg]
+        scope = "整文件（含多次运行）"
+    elif want_run is not None:
+        if not 1 <= want_run <= n_runs:
+            print(f"❌ 文件里只有 {n_runs} 次运行，取不到第 {want_run} 次（可先用 --list 看看）")
+            return 2
+        raw = runs[want_run - 1]
+        scope = f"第 {want_run} 次运行（文件里共 {n_runs} 次）"
+    else:
+        raw = runs[-1]
+        scope = f"最近一次运行（文件里共 {n_runs} 次）"
 
     rows = []
     for i, o in enumerate(raw):
@@ -91,9 +190,9 @@ def main() -> int:
     print(f"成本分解：{path.name}　{len(rows)} 次调用")
     print("=" * 92)
     if n_runs > 1:
-        scope = "整文件（含多次运行）" if not only_last else f"最近一次运行（文件里共 {n_runs} 次）"
         print(f"  ⚠️ 本文件累积了 {n_runs} 次运行，当前统计范围：{scope}")
-        print("     （录制是**追加**写入 —— 按整文件统计会把多次运行混在一起，见 #33）")
+        print("     （录制是**追加**写入 —— 按整文件统计会把多次运行混在一起，见 #33；"
+              "要取回文档引用的那一次用 `--run N`，见 #40）")
         print()
     print(f"  输入：命中 {tot_hit:,} tok　未命中 {tot_miss:,} tok　"
           f"（命中率 {tot_hit / max(tot_prompt, 1):.1%}）")

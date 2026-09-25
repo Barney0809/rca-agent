@@ -840,7 +840,8 @@
   },
   "cost_breakdown_segmentation": {
     "harness_log": [
-      "#33"
+      "#33",
+      "#40"
     ],
     "why": "#33: the recording file is APPENDED to, so one file accumulates several runs. I compared a 33-call run against a 33+24-call file and reported a bogus 'output +77%'. The script now cuts at the coordinator boundary and analyses only the last run. Until this group existed, that cut was guarded by nothing but my memory. The mutation restores the original mistake: start counting AFTER the last coordinator, so the analysed 'run' collapses to the coordinator call alone and every total is wrong.",
     "tests": [
@@ -849,12 +850,22 @@
     "mutations": [
       {
         "id": "cost1-cut-from-inside-the-last-run",
-        "desc": "Cut after the last coordinator instead of after the previous one, so the analysed 'run' is a single call and every total is wrong.",
+        "desc": "Cut each run down to the coordinator call alone -- the original #33 mistake: the analysed 'run' becomes a single call and every total is wrong.",
         "file": "scripts/cost_breakdown.py",
-        "find": "        start = idx[-2] + 1 if len(idx) >= 2 else 0",
-        "replace": "        start = idx[-1] + 1",
+        "find": "        out.append(raw[prev + 1: i + 1])",
+        "replace": "        out.append(raw[i: i + 1])",
         "expect_red": [
           "tests/test_deliverable.py::test_cost_breakdown_default_counts_only_the_last_run"
+        ]
+      },
+      {
+        "id": "cost2-off-by-one-in-the-run-selector",
+        "desc": "#40: make --run N pick the (N+1)-th run, so a reader asking for the run the docs cite silently gets a DIFFERENT run. The headline cost composition then looks reproducible while being wrong -- the worst kind of false green.",
+        "file": "scripts/cost_breakdown.py",
+        "find": "        raw = runs[want_run - 1]",
+        "replace": "        raw = runs[want_run]",
+        "expect_red": [
+          "tests/test_deliverable.py::test_cost_breakdown_can_select_an_earlier_run"
         ]
       }
     ]

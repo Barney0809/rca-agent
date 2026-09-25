@@ -36,7 +36,7 @@
 | baseline 100% / 8.3 步 / ¥0.0172 | `runs/_eval/baseline-20260925-085629/results.json` |
 | multi 100% / 28.7 步 / ¥0.0690 | `runs/_eval/multi-20260925-112648/results.json` |
 | 多 Agent 每一步的工具调用与返回 | `runs/_eval/multi-20260925-112648/traces/F{1,8}-r{1,2,3}.json` |
-| 成本构成（输出 72.3%、缓存命中率 79.5%） | `runs/_recordings/record-deepseek-flash.ndjson` |
+| 成本构成（输出 72.3%、缓存命中率 79.5%、输出 ¥0.0586） | `runs/_recordings/record-deepseek-flash.ndjson` 的**第 1 次**运行 |
 
 这两份存档 + 一份录制**随仓库提交**（`.gitignore` 里专门反选它们，见 #38），因为
 `demo/rca-demo.html` 上写着「本页由存档生成」—— 存档不在仓库里，那句话就只在作者机器上成立。
@@ -44,11 +44,18 @@
 **零成本复现**（不需要 API key、不花钱）：
 
     .\.venv\Scripts\python.exe scripts\make_demo.py        # 重放页面，应与提交的 HTML 逐字节一致
-    .\.venv\Scripts\python.exe scripts\cost_breakdown.py runs\_recordings\record-deepseek-flash.ndjson
+    .\.venv\Scripts\python.exe scripts\cost_breakdown.py runs\_recordings\record-deepseek-flash.ndjson --list
+
+⚠️ **成本那条必须加 `--run 1`**：那段录音是**追加**写入的，现在里面累积了 3 次运行，
+而上面 72.3% / 79.5% 属于**第 1 次**；不加参数会取到"最近一次"（73.5% / 79.1%），
+数字对不上并不是文档错了 —— 是取错了运行（#40）：
+
+    .\.venv\Scripts\python.exe scripts\cost_breakdown.py runs\_recordings\record-deepseek-flash.ndjson --run 1
 
 ⚠️ 但要复现**数字本身**（跑出新的一份 100% / ¥0.0172）仍需真跑评测：
 要 API key、要起被测世界、要花钱（两侧合计 ≈¥0.8）。能零成本核对的是
-**"文档里的数字与存档是否一致、页面能否由存档重放"** —— 这正是本索引存在的意义。
+**"文档里的数字与存档是否一致、页面能否由存档重放、被引用的那次运行能否取回"**
+—— 这正是本索引存在的意义。
 
 > ⚠️ **口径边界（必须连同数字一起读）**：multi 只跑了 **F1/F8 两个场景**，
 > baseline 跑满 7 个 —— 所以「准确率相同」严格说是**在这两个场景上**相同。
