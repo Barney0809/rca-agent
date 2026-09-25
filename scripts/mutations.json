@@ -1584,6 +1584,48 @@
       }
     ]
   },
+  "guard_proxy_contract": {
+    "harness_log": [
+      "#57"
+    ],
+    "why": "#57 (M3): the guard proxy is where an outside agent meets the guardrail, so its contract is the platform's contract. Three ways it can silently stop working: (a) tool results are not written into the event stream, so the guard judges a conclusion against evidence it cannot see; (b) an upstream tool failure is swallowed into an empty string, so 'the tool broke' looks exactly like 'the tool says there is nothing' -- the #26/#43 family; (c) every past submission keeps being judged, so an agent that fixes its conclusion can never clear itself (measured: this failed a test on the first run of the proxy).",
+    "tests": [
+      "tests/test_guard_proxy.py"
+    ],
+    "mutations": [
+      {
+        "id": "proxy-a-results-not-recorded",
+        "desc": "Call the upstream tool but forget to record what it returned, so the guard judges every conclusion against an empty event stream.",
+        "file": "src/rca/guard/proxy.py",
+        "find": "        self.trace.add(ToolResult(step=step, name=name, text=text, ok=ok, role=\"external\"))",
+        "replace": "        pass",
+        "expect_red": [
+          "tests/test_guard_proxy.py::test_tool_call_and_result_are_recorded_in_order",
+          "tests/test_guard_proxy.py::test_clean_conclusion_is_allowed"
+        ]
+      },
+      {
+        "id": "proxy-b-upstream-error-swallowed",
+        "desc": "Turn an upstream failure into a successful empty reply -- 'the tool broke' then looks identical to 'the tool says there is nothing', and the caller is told it succeeded.",
+        "file": "src/rca/guard/proxy.py",
+        "find": "        except Exception as exc:                      # noqa: BLE001 —— 见上：要记录，不要吞掉\n            text, ok = f\"{type(exc).__name__}: {exc}\", False",
+        "replace": "        except Exception:                             # noqa: BLE001\n            text, ok = \"\", True",
+        "expect_red": [
+          "tests/test_guard_proxy.py::test_upstream_failure_is_recorded_not_swallowed"
+        ]
+      },
+      {
+        "id": "proxy-c-judges-every-past-submission",
+        "desc": "Judge the whole trace again instead of only the latest submission, so a conclusion the agent already fixed keeps being blocked by its own first draft -- re-enacting the flaw the proxy's tests caught on day one.",
+        "file": "src/rca/guard/proxy.py",
+        "find": "        verdict = judge(run_rules(judged))",
+        "replace": "        verdict = judge(run_rules(self.trace))",
+        "expect_red": [
+          "tests/test_guard_proxy.py::test_agent_may_fix_and_resubmit_and_both_are_recorded"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1597,7 +1639,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**295 passed / 1 skipped**",
+        "find": "**302 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1607,7 +1649,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**44 组 / 112 个变异体，全部 SEALED**",
+        "find": "**45 组 / 115 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1617,8 +1659,8 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**66 条**（其中 **55 条**由变异测试证明能变红，**11 条**",
-        "replace": "封堵清单：**99 条**（其中 **55 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**67 条**（其中 **56 条**由变异测试证明能变红，**11 条**",
+        "replace": "封堵清单：**99 条**（其中 **56 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
         ]
