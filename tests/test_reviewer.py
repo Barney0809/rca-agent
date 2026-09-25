@@ -135,3 +135,7 @@ def test_reviewer_never_touches_the_answer_or_the_scoring_path() -> None:
     call_sites = coord.count("= adjudicate(")
     assert call_sites == 2, f"adjudicate 的调用点变成 {call_sites} 处 —— 修正必须只有一次（不迭代）"
     assert "revised = adjudicate(" in coord, "修订那一处不见了？"
+
+    # 修订前/后的对照必须留档，否则"修订帮了还是帮了倒忙"无法回答
+    assert 'out.guard_review["pre_revision_root_cause"] = out.verdict.root_cause' in coord
+    assert "revision_hurt" in runner, "前/后对照没接到存档里"

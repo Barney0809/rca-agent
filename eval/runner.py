@@ -569,6 +569,17 @@ def _run_multi_slice(
     ]
     correct, _ = score.judge(verdict_text)
 
+    # ★ M2 的前/后对照（零 API 成本：两次判定都只是关键词匹配）：
+    #   只存修订后的结论，就没法回答"这次修订帮了还是帮了倒忙" ——
+    #   而"把对的改错"是完全可能发生的，不量出来就等于没测。
+    guard_ledger = dict(res.to_dict().get("guard") or {})
+    if guard_ledger.get("revised") and guard_ledger.get("pre_revision_root_cause"):
+        pre_correct, _ = score.judge(str(guard_ledger["pre_revision_root_cause"]))
+        guard_ledger["pre_revision_correct"] = bool(pre_correct)
+        guard_ledger["post_revision_correct"] = bool(correct)
+        guard_ledger["revision_helped"] = bool(correct) and not bool(pre_correct)
+        guard_ledger["revision_hurt"] = bool(pre_correct) and not bool(correct)
+
     return Attempt(
         fault_id=fid,
         round_no=rnd,
@@ -588,7 +599,7 @@ def _run_multi_slice(
         and res.verdict.parse_ok,
         parse_ok=res.verdict.parse_ok,
         repeat_calls=res.repeat_calls,          # ★ 打转统计（D9）
-        guard=(res.to_dict().get("guard") or {}),   # ★ 护栏自己的账（M2）
+        guard=guard_ledger,   # ★ 护栏自己的账（M2，含前/后对照）
         trace=combined_trace,                   # ★ 各环节轨迹（#29）
         detail={
             "accepted": res.verdict.accepted,

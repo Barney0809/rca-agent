@@ -599,6 +599,9 @@ def diagnose_multi(
             # ⚠️ 只有修订产出**可解析**的结论才替换原文 ——
             #    否则宁可保留第一次的结论，也不要一个半截答案（#27 的教训）。
             if revised.parse_ok:
+                # ★ 把"修订前"的结论留档（M2 的测量要用）：
+                #   只存修订后的文本，就没法回答"这次修订是帮了还是帮了倒忙"。
+                out.guard_review["pre_revision_root_cause"] = out.verdict.root_cause
                 out.verdict = revised
                 out.guard_revised = True
             else:
