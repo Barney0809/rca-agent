@@ -50,6 +50,8 @@ ORDER = "http://127.0.0.1:8080"
 INVENTORY = "http://127.0.0.1:8081"
 PAYMENT = "http://127.0.0.1:8082"
 EVIDENCE = ROOT / "runs" / "_evidence" / "m5-live-remediation.json"
+#: 服务名 → 端口（按服务读旋钮用；三个服务都读，避免"只看一个"把别的服务读错）
+PORTS = {"order": 8080, "inventory": 8081, "payment": 8082}
 
 
 # ---------------------------------------------------------------- 世界观测
@@ -85,30 +87,51 @@ def read_world() -> dict:
     return {
         "calls_ok": _counter(inv, "downstream_calls_total", target="payment", result="ok"),
         "calls_err": _counter(inv, "downstream_calls_total", target="payment", result="error"),
-        "knobs": httpx.get(f"{INVENTORY}/_knobs", timeout=5.0).json(),
+        # ⚠️ 旋钮要**按服务**读：只看一个服务会把别的服务的旋钮读错
+        #    （第一次 live 跑就是这么误报了 payment 的 risk_error_rate）
+        "knobs": {svc: knobs_of(svc) for svc in PORTS},
     }
 
 
-def drive_traffic(orders: int) -> None:
-    """发 `orders` 笔订单（数量固定，所以"每笔的下游调用次数"是可控的比值）。"""
+def knobs_of(service: str) -> dict:
+    try:
+        return httpx.get(f"http://127.0.0.1:{PORTS[service]}/_knobs", timeout=5.0).json()
+    except Exception:                                                 # noqa: BLE001
+        return {}
+
+
+def drive_traffic(orders: int) -> tuple[int, int]:
+    """发 `orders` 笔订单，返回 (发出, **成功**)。
+
+    ⚠️ 成功数必须记下来：如果订单压根没到下游（比如被拒在前面），
+       "下游调用次数 = 0"是**测量无效**，不是"症状消失"。
+    """
+    ok = 0
     for _ in range(orders):
         try:
-            httpx.post(f"{ORDER}/orders", json={"sku": "SKU-001", "qty": 2}, timeout=20.0)
+            if httpx.post(f"{ORDER}/orders", json={"sku": "SKU-001", "qty": 2},
+                          timeout=20.0).status_code == 200:
+                ok += 1
         except Exception:                                             # noqa: BLE001
-            pass          # 注入后本来就可能失败 —— 我要的是"下游被调了几次"
+            pass
+    return orders, ok
 
 
 def measure(orders: int) -> dict:
     before = read_world()
-    drive_traffic(orders)
+    sent, ok = drive_traffic(orders)
     after = read_world()
     d_ok = after["calls_ok"] - before["calls_ok"]
     d_err = after["calls_err"] - before["calls_err"]
+    calls = d_ok + d_err
     return {
-        "orders": orders,
-        "downstream_calls_delta": d_ok + d_err,
-        "downstream_calls_per_order": round((d_ok + d_err) / orders, 2),
+        "orders_sent": sent,
+        "orders_ok": ok,
+        "downstream_calls_delta": calls,
+        "downstream_calls_per_order": round(calls / sent, 2) if sent else 0.0,
         "error_calls_delta": d_err,
+        # 测量是否可信：得有订单成功、而且下游真的被调过
+        "valid": bool(ok > 0 and calls > 0),
         "knobs": after["knobs"],
     }
 
@@ -149,10 +172,12 @@ def main() -> int:
 
     print(f"\n  ── 注入后量症状（发 {args.orders} 笔订单）──")
     before = measure(args.orders)
-    print(f"     每笔订单的下游调用次数 = {before['downstream_calls_per_order']}"
-          f"   错误调用增量 = {before['error_calls_delta']}")
-    print(f"     旋钮：retries={before['knobs'].get('downstream_retries')} "
-          f"risk_error_rate={before['knobs'].get('risk_error_rate')}")
+    print(f"     成功订单 {before['orders_ok']}/{before['orders_sent']}"
+          f"   每笔订单的下游调用次数 = {before['downstream_calls_per_order']}"
+          f"   错误调用增量 = {before['error_calls_delta']}"
+          f"   测量{'有效 ✓' if before['valid'] else '无效 ✗'}")
+    print(f"     旋钮：inventory.retries={before['knobs']['inventory'].get('downstream_retries')}"
+          f"  payment.risk_error_rate={before['knobs']['payment'].get('risk_error_rate')}")
     report["before"] = before
 
     # ---- M5：提案 → 人审批 → 执行（经 MCP 门）
@@ -179,11 +204,24 @@ def main() -> int:
 
     print(f"\n  ── 改回去后再量症状（同样 {args.orders} 笔）──")
     after = measure(args.orders)
-    print(f"     每笔订单的下游调用次数 = {after['downstream_calls_per_order']}"
-          f"   错误调用增量 = {after['error_calls_delta']}")
-    print(f"     旋钮：retries={after['knobs'].get('downstream_retries')} "
-          f"risk_error_rate={after['knobs'].get('risk_error_rate')}")
+    print(f"     成功订单 {after['orders_ok']}/{after['orders_sent']}"
+          f"   每笔订单的下游调用次数 = {after['downstream_calls_per_order']}"
+          f"   错误调用增量 = {after['error_calls_delta']}"
+          f"   测量{'有效 ✓' if after['valid'] else '无效 ✗'}")
+    print(f"     旋钮：inventory.retries={after['knobs']['inventory'].get('downstream_retries')}"
+          f"  payment.risk_error_rate={after['knobs']['payment'].get('risk_error_rate')}")
     report["after"] = after
+
+    # ⚠️ 测量无效时**不下结论**：订单没到下游时的"0 次调用"不是症状消失（实测踩过）
+    if not (before["valid"] and after["valid"]):
+        report["verdict"] = {"status": "measurement-invalid",
+                            "why": "有测量无效：订单没成功或下游没被调用 ⇒ 不拿它当症状证据"}
+        EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+        EVIDENCE.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8", newline="\n")
+        print("\n  ⚠️ 测量无效 —— 如实说：这次不构成症状级证据（需要订单成功且下游真被调用）")
+        print(f"  证据已写：{EVIDENCE.relative_to(ROOT)}")
+        return 4
 
     v_ratio = verify(symptom="每笔订单的下游调用次数",
                      before=_to_int(before["downstream_calls_per_order"] * 100),
@@ -201,9 +239,13 @@ def main() -> int:
     # 两件事要分开报：**动作生效了吗**（读回确认）与**症状修好了吗**（前后对照）。
     # 第一次 live 跑时它们混在一起，于是"动作其实什么都没改"被当成了"修好了"。
     action_ok = bool(applied) and all(a.get("applied") for a in applied)
-    symptom_ok = (v_ratio["status"] == "improved" and v_err["status"] == "improved"
-                  and after["knobs"].get("downstream_retries") == 1
-                  and float(after["knobs"].get("risk_error_rate") or 0) == 0.0)
+    targets_ok = all(
+        str(after["knobs"].get(p["service"], {}).get(p["knob"])) == str(p["target_value"])
+        for p in report["proposals"]
+    )
+    # 症状级结论：两侧测量都有效、两个指标都改善、**而且提案涉及的旋钮真的到位**
+    symptom_ok = (before["valid"] and after["valid"] and targets_ok
+                  and v_ratio["status"] == "improved" and v_err["status"] == "improved")
     report["outcome"] = ("fixed" if symptom_ok else
                          ("action-ok-symptom-partial" if action_ok else "action-failed"))
     EVIDENCE.parent.mkdir(parents=True, exist_ok=True)

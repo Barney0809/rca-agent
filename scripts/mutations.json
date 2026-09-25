@@ -1770,6 +1770,16 @@
         ]
       },
       {
+        "id": "rem-d-applied-trusts-the-return-code",
+        "desc": "Judge the action by the return code alone and drop the read-back, so the world's 200 + changed:{} (literally 'I changed nothing') counts as a successful fix -- the silent no-op measured live on 2026-09-26.",
+        "file": "src/rca/remediation.py",
+        "find": "    applied = bool(payload.get(\"allowed\", payload.get(\"ok\", False))) and effect_ok",
+        "replace": "    applied = bool(payload.get(\"allowed\", payload.get(\"ok\", False)))",
+        "expect_red": [
+          "tests/test_remediation.py::test_apply_reports_failure_when_the_world_did_not_change"
+        ]
+      },
+      {
         "id": "rem-c-verify-passes-without-observations",
         "desc": "Treat a missing observation as a pass, so the loop claims the fix worked when nothing was measured -- 'not measured' must never look like 'measured fine'.",
         "file": "src/rca/remediation.py",
@@ -1804,7 +1814,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**49 组 / 126 个变异体，全部 SEALED**",
+        "find": "**49 组 / 127 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
