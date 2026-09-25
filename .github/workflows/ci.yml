@@ -93,5 +93,4 @@ jobs:
 
       - name: dump container logs on failure
         if: failure()
-        if: always()
         run: docker compose logs --no-log-prefix
