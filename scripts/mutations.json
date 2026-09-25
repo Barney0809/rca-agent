@@ -837,5 +837,87 @@
         ]
       }
     ]
+  },
+  "cost_breakdown_segmentation": {
+    "harness_log": [
+      "#33"
+    ],
+    "why": "#33: the recording file is APPENDED to, so one file accumulates several runs. I compared a 33-call run against a 33+24-call file and reported a bogus 'output +77%'. The script now cuts at the coordinator boundary and analyses only the last run. Until this group existed, that cut was guarded by nothing but my memory. The mutation restores the original mistake: start counting AFTER the last coordinator, so the analysed 'run' collapses to the coordinator call alone and every total is wrong.",
+    "tests": [
+      "tests/test_deliverable.py"
+    ],
+    "mutations": [
+      {
+        "id": "cost1-cut-from-inside-the-last-run",
+        "desc": "Cut after the last coordinator instead of after the previous one, so the analysed 'run' is a single call and every total is wrong.",
+        "file": "scripts/cost_breakdown.py",
+        "find": "        start = idx[-2] + 1 if len(idx) >= 2 else 0",
+        "replace": "        start = idx[-1] + 1",
+        "expect_red": [
+          "tests/test_deliverable.py::test_cost_breakdown_default_counts_only_the_last_run"
+        ]
+      }
+    ]
+  },
+  "deliverable_artifact_integrity": {
+    "harness_log": [
+      "#37"
+    ],
+    "why": "#37: the public demo page claims 'generated from the archives', and that claim was false in four ways at once: (1) the tariff cell rendered EMPTY when an archive predates the pricing_tier field -- a blank reads as 'nothing to see', while what it actually means is 'was not recorded'; (2) the sample description ('7 scenarios x 3 rounds') was typed by hand rather than derived, so any re-run would have left the page lying; (3) the trace caption was hardcoded to F8's description even though the displayed scenario can fall back to another fault; (4) the seal checklist listed 50 entries with P5..P9 duplicated, because the parser also swallowed a later detail table -- and it presented human-only process defects as if mutation testing had proven them. My own hand audit had 'verified' the page by comparing it against the same parser, which is a tautology (50 = 50 proves nothing).",
+    "tests": [
+      "tests/test_deliverable.py"
+    ],
+    "mutations": [
+      {
+        "id": "demo1-pick-the-newest-name-not-the-fullest-run",
+        "desc": "Choose the archive by filename instead of by attempt count, so a 2-case smoke run masquerades as the official 21-attempt baseline.",
+        "file": "scripts/make_demo.py",
+        "find": "        if best is None or cand[:2] > best[:2]:",
+        "replace": "        if best is None or cand[1] > best[1]:",
+        "expect_red": [
+          "tests/test_deliverable.py::test_demo_picks_the_most_complete_run_not_the_newest_name"
+        ]
+      },
+      {
+        "id": "demo2-blank-tariff-when-the-archive-has-no-field",
+        "desc": "Do not recompute the tariff from started_at, so an archive without a pricing_tier field renders an empty cell instead of a stated off-peak/peak verdict.",
+        "file": "scripts/make_demo.py",
+        "find": "    started = str(data.get(\"started_at\") or \"\").strip()\n    if started:",
+        "replace": "    started = \"\"\n    if started:",
+        "expect_red": [
+          "tests/test_deliverable.py::test_demo_recomputes_the_tariff_when_the_archive_has_no_field"
+        ]
+      },
+      {
+        "id": "demo3-describe-any-fault-with-F8s-caption",
+        "desc": "Hardcode F8's description for whatever scenario is displayed, so the page asserts a memory leak for a trace that never showed one.",
+        "file": "scripts/make_demo.py",
+        "find": "    demo_note = FAULT_NOTE.get(demo_fault, \"\")",
+        "replace": "    demo_note = FAULT_NOTE[\"F8\"]",
+        "expect_red": [
+          "tests/test_deliverable.py::test_demo_does_not_apply_another_faults_note"
+        ]
+      },
+      {
+        "id": "demo4-swallow-every-table-in-the-log",
+        "desc": "Scan the whole harness log instead of the overview section, so a later detail table counts as seal evidence and P5..P9 appear twice.",
+        "file": "scripts/make_demo.py",
+        "find": "        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith(\"## \")), len(lines))",
+        "replace": "        end = len(lines)",
+        "expect_red": [
+          "tests/test_deliverable.py::test_demo_seal_table_ignores_other_tables_in_the_log"
+        ]
+      },
+      {
+        "id": "demo5-list-a-duplicated-seal-twice",
+        "desc": "Drop the de-duplication, so a repeated row in the overview table is printed twice and the stated entry count is inflated.",
+        "file": "scripts/make_demo.py",
+        "find": "        if not re.fullmatch(r\"#\\d+|P\\d+\", head) or head in seen:",
+        "replace": "        if not re.fullmatch(r\"#\\d+|P\\d+\", head):",
+        "expect_red": [
+          "tests/test_deliverable.py::test_demo_seal_table_ignores_other_tables_in_the_log"
+        ]
+      }
+    ]
   }
 }

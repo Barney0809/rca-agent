@@ -31,11 +31,18 @@ import html
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EVAL_DIR = ROOT / "runs" / "_eval"
 OUT = ROOT / "demo" / "rca-demo.html"
+
+# 本脚本是**直接执行**的（不经 pytest，所以拿不到 pyproject 里的 pythonpath），
+# 而它现在需要真实计价模型 —— 按仓库里其它脚本的写法自己挂 src。
+sys.path.insert(0, str(ROOT / "src"))
+
+from rca.llm.provider import is_peak_hour  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -45,6 +52,15 @@ except Exception:
 
 def e(x) -> str:
     return html.escape(str(x), quote=True)
+
+
+def _status_cls(status: str) -> str:
+    """状态列的颜色：机器证明过的才是"好"，靠人的一律显眼。"""
+    if "🟢" in status:
+        return "ok"
+    if "🟡" in status or "⚠" in status:
+        return "warn"
+    return "bad"
 
 
 def latest(pattern: str) -> Path | None:
@@ -73,9 +89,46 @@ def load(p: Path) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+# 故障目录里的一句话描述（只用于第三节的标题）。
+# ⚠️ **不能无条件套用** —— 第三节的场景是**挑出来**的（优先 F8，没有 F8 才退回 F1），
+#    如果描述写死在模板里，退回 F1 的那天页面会拿 F8 的说明去描述 F1 的轨迹。
+#    未知故障一律留空，宁可少说。
+FAULT_NOTE = {
+    "F1": "外部风控变慢（下游延迟）",
+    "F8": "多故障叠加：外部风控变慢 + order 内存泄漏",
+}
+
+
+def tier_of(data: dict) -> tuple[str, str]:
+    """计价时段 + **它的来源**。
+
+    ⚠️ 存档里的 `pricing_tier` 是**后来才加的字段** —— 早于它的存档里没有这个键。
+       第一版直接 `data.get("pricing_tier", "")`，于是在页面上渲染出一个
+       **空白单元格**（`baseline <code></code>`），而那正是"只与同时段比较"
+       这句话的落点。空白看起来像"没这回事"，实际是"当时没记"。
+       自检脚本用 `baseline <code></code>` 这个模式抓到了它。
+
+    ⇒ 存档没记就按 `started_at` 用**真实计价模型**重算，并把「重算」写出来 ——
+       读者能看出哪个数字是当场记的、哪个是事后推的。
+    """
+    rec = str(data.get("pricing_tier") or "").strip()
+    if rec:
+        return rec, "存档记录"
+    started = str(data.get("started_at") or "").strip()
+    if started:
+        try:
+            when = datetime.fromisoformat(started)
+        except ValueError:
+            return "未记录", "时刻不可解析"
+        return ("peak" if is_peak_hour(when) else "off_peak"), "按开始时刻重算"
+    return "未记录", "无开始时刻，无法重算"
+
+
 def totals(data: dict) -> dict:
     at = data["attempts"]
     n = len(at)
+    faults = sorted({a["fault_id"] for a in at})
+    tier, tier_src = tier_of(data)
     return {
         "n": n,
         "acc": sum(1 for a in at if a["correct"]) / n,
@@ -84,7 +137,15 @@ def totals(data: dict) -> dict:
         "conv": sum(1 for a in at if a["finished"]) / n,
         "json": sum(1 for a in at if a["parse_ok"]) / n,
         "total": sum(a["cost_yuan"] for a in at),
-        "tier": data.get("pricing_tier", ""),
+        # 样本口径**从存档推导**，不写死。写死的话，换一次运行页面就会
+        # 继续宣称"7 场景 × 3 轮"（见 harness-log #37）。
+        "scen": len(faults),
+        "faults": faults,
+        "rounds": len({a["round_no"] for a in at}),
+        "tier": tier,
+        "tier_src": tier_src,
+        # 同样不许留白：没记就写"未记录"（#37 的推广形式）
+        "started_at": str(data.get("started_at") or "").strip() or "未记录",
     }
 
 
@@ -97,20 +158,47 @@ def load_trace(data: dict, fault: str, rnd: int) -> list:
     return []
 
 
-def seal_table() -> list[tuple[str, str]]:
-    """从 harness-log 的总览表抽出（编号, 一句话描述）。"""
+OVERVIEW_HEADING = "封堵状态总览"
+
+
+def seal_table() -> list[tuple[str, str, str]]:
+    """从 harness-log 的**封堵状态总览表**抽出（编号, 一句话描述, 状态）。
+
+    ⚠️ 两个坑，都是补用例时抓到的：
+
+    1. **不能"抓文件里所有像清单的表格行"。** 文件里还有别的表也以编号开头
+       （`P5~P9` 那节的逐条表就是这样），第一版于是让 `P5`~`P9` **各出现两次**，
+       页面写着"封堵清单（50 条）"而真实条目是 45 条。（我此前手工核对时
+       拿页面和同一个解析器比，那是个恒真式 —— 50 = 50，什么也没证明。）
+    2. **不能把状态丢掉。** 总览表里 `P1`/`P2`/`P3` 是"⚠️/❌ 靠人"，
+       而页面上原有那句话是"每条都能由变异测试证明能变红" ——
+       把那三条**也说成了机器证明过的**。状态列必须如实带上。
+
+    ⇒ 只扫总览小节（标题 → 下一个 `## `），再按编号去重（首次出现优先）。
+    """
     log = (ROOT / "docs" / "harness-log.md").read_text(encoding="utf-8")
-    out: list[tuple[str, str]] = []
-    for line in log.splitlines():
+    lines = log.splitlines()
+
+    start = next((i for i, ln in enumerate(lines) if ln.startswith("##") and OVERVIEW_HEADING in ln), None)
+    if start is not None:
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        lines = lines[start:end]
+
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for line in lines:
         if not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 3:
             continue
         head = cells[0].replace("*", "").strip()
-        if re.fullmatch(r"#\d+|P\d+", head):
-            desc = re.sub(r"[*`]", "", cells[1])[:64]
-            out.append((head, desc))
+        if not re.fullmatch(r"#\d+|P\d+", head) or head in seen:
+            continue
+        seen.add(head)
+        desc = re.sub(r"[*`]", "", cells[1])[:64]
+        status = next((c for c in reversed([re.sub(r"[*`]", "", c) for c in cells[2:]]) if c), "")
+        out.append((head, desc, status[:24]))
     return out
 
 
@@ -129,27 +217,46 @@ def build() -> str:
     multi_p = latest("multi-*/results.json")
     if base_p is None:
         raise SystemExit("找不到 baseline 的 results.json")
-    base, multi = load(base_p), load(multi_p) if multi_p else None
+    # ⚠️ 第二版模板无条件引用 multi 的字段，所以 multi 缺失时**在这里就报清楚**，
+    #    而不是等 f-string 抛一个 `NoneType is not subscriptable`。
+    if multi_p is None:
+        raise SystemExit("找不到 multi 的 results.json")
+    base, multi = load(base_p), load(multi_p)
     # ★ 把选中的来源打出来 —— 免得又静默用错了一次冒烟运行
     print(f"  baseline 取：{base_p.parent.name}（{len(base['attempts'])} 次尝试）")
-    if multi:
-        print(f"  multi    取：{multi_p.parent.name}（{len(multi['attempts'])} 次尝试）")
-    b = totals(base)
-    m = totals(multi) if multi else None
+    print(f"  multi    取：{multi_p.parent.name}（{len(multi['attempts'])} 次尝试）")
+    b, m = totals(base), totals(multi)
+
+    # 样本口径与计价时段**全部由存档推出**（#37：写死的那些迟早会和存档对不上）
+    b_sample = f"{b['n']} 次尝试（{b['scen']} 场景 × {b['rounds']} 轮）"
+    m_faults = "/".join(m["faults"])
+    m_sample = f"{m['n']} 次尝试（{m_faults} × {m['rounds']} 轮）"
+    untested = b["scen"] - m["scen"]
+    print(f"  样本口径：baseline {b_sample}；multi {m_sample}")
+    print(f"  计价时段：baseline {b['tier']}（{b['tier_src']}）"
+          f"；multi {m['tier']}（{m['tier_src']}）")
 
     # 挑一次"多故障"的诊断来展示完整轨迹（F8：分工的价值与失效都在这里）
-    demo_fault = "F8" if multi and any(a["fault_id"] == "F8" for a in multi["attempts"]) else "F1"
+    demo_fault = "F8" if "F8" in m["faults"] else m["faults"][0]
     demo_round = 1
-    trace = load_trace(multi, demo_fault, demo_round) if multi else []
+    demo_note = FAULT_NOTE.get(demo_fault, "")
+    trace = load_trace(multi, demo_fault, demo_round)
     verdict = ""
-    if multi:
-        for a in multi["attempts"]:
-            if a["fault_id"] == demo_fault and a["round_no"] == demo_round:
-                verdict = a.get("root_cause", "")
+    for a in multi["attempts"]:
+        if a["fault_id"] == demo_fault and a["round_no"] == demo_round:
+            verdict = a.get("root_cause", "")
+    if not demo_note:
+        print(f"  ⚠️ 场景 {demo_fault} 不在 FAULT_NOTE 里 —— 标题不带描述（宁可少说）")
 
     rows = seal_table()
+    n_sealed = sum(1 for _i, _d, s in rows if "🟢" in s)
+    n_human = len(rows) - n_sealed
+    human_ids = "、".join(i for i, _d, s in rows if "🟢" not in s)
+    print(f"  封堵清单：{len(rows)} 条（变异测试证明 {n_sealed}，靠人 {n_human}）")
     seals = "".join(
-        f"<tr><td><code>{e(i)}</code></td><td>{e(d)}</td></tr>" for i, d in rows
+        f'<tr><td><code>{e(i)}</code></td><td>{e(d)}</td>'
+        f'<td class="{_status_cls(s)}">{e(s)}</td></tr>'
+        for i, d, s in rows
     )
 
     return f"""<!doctype html>
@@ -178,6 +285,9 @@ def build() -> str:
  details{{border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:6px 0}}
  summary{{cursor:pointer}}
  .warn{{color:var(--warn);font-weight:600}}
+ .ok{{color:var(--accent)}}
+ .bad{{color:#b91c1c;font-weight:600}}
+ @media (prefers-color-scheme:dark){{.bad{{color:#fca5a5}}}}
  blockquote{{margin:12px 0;padding:10px 14px;border-left:3px solid var(--accent);
    background:color-mix(in srgb,var(--accent) 7%,transparent)}}
 </style></head><body><main>
@@ -202,8 +312,8 @@ def build() -> str:
 <h2>二、定稿数字（同配置 · 同时段 · 同一评分路径）</h2>
 <table>
 <tr><th>指标</th><th>baseline（单 Agent）</th><th>multi（三专员+质证+裁决）</th><th>倍数</th></tr>
-<tr><td>样本</td><td class="num">{b['n']} 次尝试（7 场景 × 3 轮）</td>
-    <td class="num">{m['n']} 次尝试（F1/F8 × 3 轮）</td><td>—</td></tr>
+<tr><td>样本</td><td class="num">{e(b_sample)}</td>
+    <td class="num">{e(m_sample)}</td><td>—</td></tr>
 <tr><td>准确率</td><td class="num"><strong>{b['acc']:.0%}</strong></td>
     <td class="num"><strong>{m['acc']:.0%}</strong></td><td>—</td></tr>
 <tr><td>步数（LLM 轮次）</td><td class="num">{b['steps']:.1f}</td>
@@ -214,13 +324,16 @@ def build() -> str:
 <tr><td>收敛率</td><td class="num">{b['conv']:.0%}</td><td class="num">{m['conv']:.0%}</td><td>—</td></tr>
 <tr><td>JSON 合规率</td><td class="num">{b['json']:.0%}</td><td class="num">{m['json']:.0%}</td><td>—</td></tr>
 </table>
-<p class="dim">计价时段：baseline <code>{e(b['tier'])}</code> ·
-multi <code>{e(m['tier'])}</code>（峰时单价是谷时的 2 倍，<strong>只与同时段比较</strong>）。
-有效场景 7 个 —— <strong>F2 已作废</strong>（它的标准答案是反的，见第四节）。
-⚠️ multi 只跑了 F1/F8 两个场景，其余五个<strong>未测</strong>。</p>
+<p class="dim">计价时段：baseline <code>{e(b['tier'])}</code>（{e(b['tier_src'])}） ·
+multi <code>{e(m['tier'])}</code>（{e(m['tier_src'])}）
+—— 峰时单价是谷时的 2 倍，<strong>只与同时段比较</strong>。
+起跑时刻：baseline <code>{e(b['started_at'])}</code> ·
+multi <code>{e(m['started_at'])}</code>（法定节假日<strong>全天</strong>按谷时计费）。
+有效场景 {b['scen']} 个 —— <strong>F2 已作废</strong>（它的标准答案是反的，见第四节）。
+⚠️ multi 只跑了 {e(m_faults)} 这 {m['scen']} 个场景，其余 {untested} 个<strong>未测</strong>。</p>
 
 <h2>三、一次真实诊断的完整轨迹</h2>
-<p class="dim">场景 <code>{e(demo_fault)}</code>（多故障叠加：外部风控变慢 + order 内存泄漏），
+<p class="dim">场景 <code>{e(demo_fault)}</code>{('（' + e(demo_note) + '）') if demo_note else ''}，
 第 {demo_round} 轮。下面是<strong>原样存档</strong>的工具调用与返回 ——
 页面不替它修饰任何东西。</p>
 <h3>最终裁决</h3>
@@ -257,9 +370,11 @@ multi <code>{e(m['tier'])}</code>（峰时单价是谷时的 2 倍，<strong>只
 
 <h2>五、封堵清单（{len(rows)} 条）</h2>
 <p class="dim">项目规则：<strong>一条错误只有在回归用例能变红之后，才算封堵。</strong>
-下表的「能变红」由变异测试证明 —— 每个变异体会把缺陷重新注回一份代码副本，
-用例必须变红，否则报 <code>NOT SEALED</code>。</p>
-<table><tr><th>编号</th><th>缺陷</th></tr>{seals}</table>
+其中 <strong>{n_sealed}</strong> 条的「能变红」由<strong>变异测试</strong>证明 ——
+每个变异体会把缺陷重新注回一份代码副本，用例必须变红，否则报 <code>NOT SEALED</code>。
+剩下的 <strong>{n_human}</strong> 条（{e(human_ids)}）是<strong>流程缺陷</strong>，
+它们<strong>无法</strong>用变异测试证明，状态列里如实写着「靠人」。</p>
+<table><tr><th>编号</th><th>缺陷</th><th>状态</th></tr>{seals}</table>
 
 </main></body></html>
 """
