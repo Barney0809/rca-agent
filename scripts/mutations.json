@@ -178,10 +178,10 @@
       },
       {
         "id": "snap-c-truncate-in-snapshot-layer",
-        "desc": "#19, other layer: truncate inside Attempt.to_dict() instead -- the plausible version of this mistake ('results.json is getting big, let's trim it'). Guards the save/load round-trip invariant, which the slice-level test does not cover.",
+        "desc": "#19, other layer: truncate inside the snapshot layer instead. The plausible version of this mistake is 'results.json is getting big, let us trim it'. Guards the save/load round-trip invariant, which the slice-level test does not cover. (NOTE: this definition had to be updated after to_dict was rewritten for #29's trace work -- a refactor silently invalidated it, which is exactly the #25 failure mode.)",
         "file": "eval/runner.py",
-        "find": "    def to_dict(self) -> dict:\n        return self.__dict__.copy()",
-        "replace": "    def to_dict(self) -> dict:\n        d = self.__dict__.copy()\n        d[\"root_cause\"] = d[\"root_cause\"][:400]\n        return d",
+        "find": "        d = {k: v for k, v in self.__dict__.items() if k != \"trace\"}\n        return d",
+        "replace": "        d = {k: v for k, v in self.__dict__.items() if k != \"trace\"}\n        d[\"root_cause\"] = d[\"root_cause\"][:400]\n        return d",
         "expect_red": [
           "tests/test_eval.py::test_regression_19_saved_report_can_reproduce_its_own_verdict"
         ]
