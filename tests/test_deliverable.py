@@ -352,6 +352,36 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     assert lines.index("runs/*") < lines.index("!runs/_eval/"), "反选规则的位置不对"
 
 
+def test_demo_generator_writes_lf_so_a_fresh_clone_stays_clean(fake_root: Path) -> None:
+    """生成器必须写 **LF**：#39。
+
+    `.gitattributes` 写着 `* text=auto eol=lf`，而 Python 文本模式在 Windows 上
+    默认写 CRLF ⇒ **每跑一次生成器，克隆里就多一次"假修改"**
+    （`git status` 报 M、`git diff` 却是空的）。陌生人第一次克隆就会看到仓库"脏了"。
+
+    ⚠️ 这一条是 **Windows 专属**的：在 Linux 上默认换行本来就是 `\\n`，
+       所以对应的变异体在 Linux 上是空操作（本项目只在 Windows 上跑，见 AGENTS.md）。
+    """
+    at = "2026-09-25T09:00:00+08:00"
+    for name in ("baseline-20260925-090000", "multi-20260925-090000"):
+        _write_archive(fake_root, name, _archive(at, [_attempt("F1", 1)]))
+
+    assert make_demo.main() == 0
+    raw = (fake_root / "demo" / "rca-demo.html").read_bytes()
+
+    assert b"\r\n" not in raw, "生成器写了 CRLF —— 克隆里会出现一次「假修改」"
+
+
+def test_committed_demo_page_has_no_crlf() -> None:
+    """提交进仓库的那份页面也必须是 LF（同上，#39）。"""
+    if not (ROOT / "demo" / "rca-demo.html").exists():
+        pytest.skip("页面还没生成")
+
+    raw = (ROOT / "demo" / "rca-demo.html").read_bytes()
+
+    assert b"\r\n" not in raw, "提交的页面里有 CRLF —— 与 .gitattributes 的 eol=lf 冲突"
+
+
 def test_committed_demo_page_is_reproducible_from_the_archives() -> None:
     """**"本页由存档生成"必须真的可复现。**
 

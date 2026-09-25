@@ -862,7 +862,8 @@
   "deliverable_artifact_integrity": {
     "harness_log": [
       "#37",
-      "#38"
+      "#38",
+      "#39"
     ],
     "why": "#37: the public demo page claims 'generated from the archives', and that claim was false in four ways at once: (1) the tariff cell rendered EMPTY when an archive predates the pricing_tier field -- a blank reads as 'nothing to see', while what it actually means is 'was not recorded'; (2) the sample description ('7 scenarios x 3 rounds') was typed by hand rather than derived, so any re-run would have left the page lying; (3) the trace caption was hardcoded to F8's description even though the displayed scenario can fall back to another fault; (4) the seal checklist listed 50 entries with P5..P9 duplicated, because the parser also swallowed a later detail table -- and it presented human-only process defects as if mutation testing had proven them. My own hand audit had 'verified' the page by comparing it against the same parser, which is a tautology (50 = 50 proves nothing).",
     "tests": [
@@ -927,6 +928,16 @@
         "replace": "",
         "expect_red": [
           "tests/test_deliverable.py::test_frozen_evidence_is_present_and_not_ignored"
+        ]
+      },
+      {
+        "id": "demo7-let-python-pick-the-platform-newline",
+        "desc": "#39: drop the explicit newline so the generator writes platform-default line endings. On Windows -- this project's only platform -- every regeneration then shows up as a spurious 'modified file' in a fresh clone, because .gitattributes demands eol=lf. (On Linux the default already IS \\n, so this mutant is a no-op there.)",
+        "file": "scripts/make_demo.py",
+        "find": "    OUT.write_text(html_text, encoding=\"utf-8\", newline=\"\\n\")",
+        "replace": "    OUT.write_text(html_text, encoding=\"utf-8\")",
+        "expect_red": [
+          "tests/test_deliverable.py::test_demo_generator_writes_lf_so_a_fresh_clone_stays_clean"
         ]
       }
     ]

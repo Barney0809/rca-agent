@@ -385,7 +385,12 @@ multi <code>{e(m['started_at'])}</code>（法定节假日<strong>全天</strong>
 def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     html_text = build()
-    OUT.write_text(html_text, encoding="utf-8")
+    # ⚠️ 必须显式 `newline="\n"`。
+    #    `.gitattributes` 写着 `* text=auto eol=lf`，而 Python 的文本模式在 Windows 上
+    #    默认把 "\n" 翻译成 CRLF —— 于是**每跑一次生成器，克隆里就多一次"假修改"**
+    #    （`git status` 报 M，`git diff` 却是空的），陌生人会以为仓库脏了。
+    #    这正是 `.gitattributes` 第 1 行想避免的那种噪音。（#39）
+    OUT.write_text(html_text, encoding="utf-8", newline="\n")
     kb = len(html_text.encode("utf-8")) / 1024
     print(f"已生成：{OUT.relative_to(ROOT)}（{kb:.0f} KB，自包含、无需服务器）")
     return 0
