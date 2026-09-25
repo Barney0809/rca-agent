@@ -328,6 +328,78 @@ ADVERSARIAL: list[dict] = [
             "根因是外部风控变慢。即便把内存泄漏修好，这次延迟照样会发生。"
         ),
     },
+    {
+        "id": "adv-4-byproduct",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「副产品」",
+        "text": "根因是外部风控响应变慢。order 的内存增长属于这次故障的副产品。",
+    },
+    {
+        "id": "adv-5-does-not-touch-it",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「不沾边」",
+        "text": "本次全链路变慢由风控延迟引起。内存增长这件事和本次现象不沾边。",
+    },
+    {
+        "id": "adv-6-another-track",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「另一条线上的问题」",
+        "text": "延迟的源头是外部风控。内存泄漏是另一条线上的问题。",
+    },
+    {
+        "id": "adv-7-source-is-elsewhere",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「源头不在 order 侧」",
+        "text": "本次现象的源头不在 order 侧，而在其下游的风控依赖；order 侧的内存增长不构成原因。",
+    },
+    {
+        "id": "adv-8-should-be-separated",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「应当分开看」（⚠️ 第一版写漏了「内存」二字，"
+                "裁判判 absent 是对的 —— **样本本身也要被检查**）",
+        "text": "外部风控变慢解释了延迟上升。至于 order 侧的内存增长，"
+                "这两件事应当分开看，前者推不出后者。",
+    },
+    {
+        "id": "adv-9-side-branch",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「旁支问题」",
+        "text": "根因是风控延迟升高。order 的内存增长属于旁支问题。",
+    },
+    {
+        "id": "adv-10-negligible",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「影响可以忽略」",
+        "text": "风控变慢是本次延迟的原因。内存增长的影响可以忽略。",
+    },
+    {
+        "id": "adv-11-unrelated-word-avoided",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「不相干」（刻意避开标记表里的「无关」）",
+        "text": "延迟来自外部风控。内存增长与本次异常不相干。",
+    },
+    {
+        "id": "adv-12-legacy",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「历史遗留，本次并未被触发」",
+        "text": "根因是风控依赖变慢。内存增长是历史遗留，本次并未被触发。",
+    },
+    {
+        "id": "adv-13-cannot-explain",
+        "cause": "内存泄漏",
+        "expected": DISMISSED,
+        "note": "「解释不了」（刻意避开标记表里的「无法解释/不能解释」）",
+        "text": "外部风控变慢可以解释全部延迟。内存增长解释不了延迟上升。",
+    },
 ]
 
 
@@ -354,6 +426,9 @@ def compare_on_adversarial(model: str | None = None) -> int:
         print(f"      期望 {fx['expected']}")
         print(f"      关键词 {kw}  {'✅' if kw == fx['expected'] else '❌ 被绕过'}")
         print(f"      裁判   {res.verdict}  {'✅' if res.verdict == fx['expected'] else '❌'}")
+        if res.verdict != fx["expected"]:
+            print(f"      ⚠️ 裁判错在这一条 —— 理由：{res.why}")
+            print(f"         原文：{fx['text']}")
     n = len(ADVERSARIAL)
     print()
     print(f"  关键词判定：{kw_ok}/{n}　LLM 裁判：{judge_ok}/{n}　成本 ¥{cost:.6f}")

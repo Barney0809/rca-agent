@@ -325,6 +325,7 @@ def _run_baseline_slice(
     judge_fn=None,
 ) -> Attempt:
     diag = baseline_agent.diagnose(ctx)
+    jd = judge_detail(score, diag.root_cause, judge_fn)
     correct, _ = score.judge(diag.root_cause)
     return Attempt(
         fault_id=fid,
@@ -346,7 +347,6 @@ def _run_baseline_slice(
         root_cause=diag.root_cause,
         steps=diag.steps,
         tool_calls=diag.tool_calls,
-        cost_yuan=diag.cost_yuan,
         input_tokens=diag.input_tokens,
         output_tokens=diag.output_tokens,
         elapsed_s=diag.elapsed_s,
@@ -355,7 +355,9 @@ def _run_baseline_slice(
         # ★ 打转统计（D9）：`ctx` 就是这次 diagnose 用的上下文，
         #   工具调用全走 ToolBox，所以计数都在它身上。
         repeat_calls=getattr(ctx, "repeat_calls", 0),
-        detail=judge_detail(score, diag.root_cause, judge_fn),
+        detail=jd,
+        # ⚠️ 裁判的成本**必须回填**，否则"总计"低估真实花费
+        cost_yuan=diag.cost_yuan + jd.get("judge_cost_yuan", 0.0),
     )
 
 
@@ -380,6 +382,7 @@ def _run_multi_slice(
     res = diagnose_multi(client, ctx, model=model, max_steps=max_steps,
                          cross_exam_steps=cross_exam_steps)
     verdict_text = res.verdict.root_cause
+    jd = judge_detail(score, verdict_text, judge_fn)
     correct, _ = score.judge(verdict_text)
 
     return Attempt(
@@ -392,7 +395,7 @@ def _run_multi_slice(
         # 统一口径：steps = 总 LLM 调用次数（baseline 的 steps 也是 LLM 轮次）
         steps=res.n_llm_calls,
         tool_calls=res.total_tool_calls,
-        cost_yuan=res.total_cost_yuan,
+        cost_yuan=res.total_cost_yuan + jd.get("judge_cost_yuan", 0.0),
         input_tokens=0,          # 多 Agent 的 token 汇总见 detail
         output_tokens=0,
         elapsed_s=res.elapsed_s,
@@ -412,7 +415,7 @@ def _run_multi_slice(
             "hypotheses": [h.to_dict() for h in res.hypotheses],
             "cross_exams": [c.to_dict() for c in res.cross_exams],
             "verdict": res.verdict.to_dict(),
-            **judge_detail(score, verdict_text, judge_fn),
+            **jd,
         },
     )
 
@@ -528,8 +531,13 @@ def _print_cause_axes(report: Report) -> None:
 def judge_detail(score, text: str, judge_fn) -> dict:
     """对这次结论跑一遍 LLM 裁判，把结论记进 detail。
 
-    `judge_fn(文本, 原因名) -> "asserted" | "dismissed" | "absent" | "unknown"`
+    `judge_fn(文本, 原因名) -> verdict`
+    或 `-> (verdict, cost_yuan)` —— 两种都认（后者用来把裁判成本回填，见下）。
     传 None 表示这次不跑裁判（默认）。
+
+    ⚠️ 返回里带 `judge_cost_yuan`，调用方必须把它**加进 Attempt.cost_yuan**。
+       不加的话报告的"总计"会**低估**真实花费 ——
+       而"跑一次评测到底花了多少"正是本项目要如实给出的三个数字之一。
     """
     from eval.scenarios import CAUSE_LABELS, Cause
 
@@ -544,13 +552,24 @@ def judge_detail(score, text: str, judge_fn) -> dict:
     )
 
     verdicts: dict[str, str] = {}
+    total_cost = 0.0
     for c in causes:
         try:
-            verdicts[c.name] = str(judge_fn(text, c.name))
+            out = judge_fn(text, c.name)
+            if isinstance(out, tuple):
+                verdict, cost = out[0], float(out[1])
+                total_cost += cost
+            else:
+                verdict = out
+            verdicts[c.name] = str(verdict)
         except Exception as exc:  # noqa: BLE001
             # 裁判自己出错 → 如实记录，**不许当成一致**
             verdicts[c.name] = f"error:{type(exc).__name__}"
-    return {"judge": verdicts}
+
+    out_detail: dict = {"judge": verdicts}
+    if total_cost:
+        out_detail["judge_cost_yuan"] = round(total_cost, 6)
+    return out_detail
 
 
 def judge_asserts_all(attempt: Attempt):
@@ -656,8 +675,9 @@ def _make_judge_fn():
 
     client = DeepSeekClient(LlmConfig.from_env())
 
-    def _fn(text: str, cause: str) -> str:
-        return judge_cause(client, text, cause).verdict
+    def _fn(text: str, cause: str):
+        res = judge_cause(client, text, cause)
+        return res.verdict, res.cost_yuan
 
     return _fn
 

@@ -982,3 +982,34 @@ def test_judge_agreement_is_empty_without_a_judge_run():
     agg = Report(model="m", mode="live", rounds=3, started_at="t",
                  attempts=[_attempt_with("F1", correct=True)]).agg()
     assert "n_judged" not in agg or not agg.get("n_judged")
+
+def test_judge_cost_is_folded_back_into_the_attempt_cost():
+    """裁判的成本**必须**加进 Attempt.cost_yuan。
+
+    否则报告的"总计"会低估真实花费 —— 而"跑一次评测花了多少钱"
+    正是本项目要如实给出的三个数字之一（#27 之后尤其不能糊）。
+    """
+    from eval.runner import judge_detail
+
+    def fake_with_cost(text, cause):
+        return "asserted", 0.0025        # 元组形式：结论 + 成本
+
+    d = judge_detail(_sc("F8"), "任意文本", fake_with_cost)
+    assert d["judge_cost_yuan"] == 0.005, (
+        f"F8 要判两条，成本应累加为 0.005，实际 {d.get('judge_cost_yuan')}"
+    )
+    assert set(d["judge"]) == {"外部风控变慢", "内存泄漏"}
+
+
+def test_judge_fn_may_return_a_bare_verdict_string():
+    """两种返回形式都要认：只给结论（测试里常用）也照样工作。"""
+    from eval.runner import judge_detail
+
+    d = judge_detail(_sc("F1"), "外部风控变慢", lambda t, c: "asserted")
+    assert d == {"judge": {"外部风控变慢": "asserted"}}, "没有成本时不该凭空造一个 0.0 出来"
+
+
+def test_judge_cost_is_not_invented_when_there_is_no_judge():
+    from eval.runner import judge_detail
+
+    assert judge_detail(_sc("F1"), "文本", None) == {}
