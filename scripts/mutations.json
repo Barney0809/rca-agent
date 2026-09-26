@@ -1742,7 +1742,8 @@
   },
   "remediation_loop": {
     "harness_log": [
-      "#60"
+      "#60",
+      "#61"
     ],
     "why": "#60 (M5): the loop that actually changes the system back. Three ways it becomes dangerous or useless: (a) the human approval quietly becomes optional (then it is an auto-remediation bot); (b) the proposal writes the INJECTED value back instead of the original one (this is the semantic slip I made myself: the change log's `from` is the original value, `to` is the current one); (c) verification reports success while there are no observations at all -- the #26 empty-green trap, this time on the action side.",
     "tests": [
@@ -1788,6 +1789,16 @@
         "expect_red": [
           "tests/test_remediation.py::test_verify_refuses_to_pass_without_after_observations"
         ]
+      },
+      {
+        "id": "rem-e-verify-hardcodes-the-direction",
+        "desc": "#61: hardcode the direction of the metric again (smaller is always better), the criterion that actually shipped to the remote in 921a5f5 -- 'successful orders 10 -> 0' is then reported as improved and the demo exits 0 announcing a pass. A wrong direction turns a disaster into a favourable-looking number, with no error anywhere.",
+        "file": "src/rca/remediation.py",
+        "find": "    elif (after < before) if lower_is_better else (after > before):",
+        "replace": "    elif after < before:",
+        "expect_red": [
+          "tests/test_remediation.py::test_verify_respects_the_direction_of_the_metric"
+        ]
       }
     ]
   },
@@ -1814,7 +1825,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**49 组 / 127 个变异体，全部 SEALED**",
+        "find": "**49 组 / 128 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1824,7 +1835,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**70 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**71 条**（其中 **60 条**由变异测试证明能变红，**11 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
