@@ -22,7 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from remediate_demo import fault_is_armed, metrics_disagree  # noqa: E402
+from rca.remediation import Proposal, propose           # noqa: E402
+from remediate_demo import (                            # noqa: E402
+    fault_is_armed,
+    metrics_disagree,
+    patch_coverage,
+    remediation_outcome,
+)
 
 #: 真实形状（取自 runs/r-20260926-235507/changes.ndjson）
 RECORD = {"ts": "2026-09-26T23:55:18+08:00", "target": "inventory",
@@ -88,3 +94,54 @@ def test_metrics_disagree_is_not_vacuously_true() -> None:
     assert metrics_disagree(user_facing=_v("worse"), causal_aligned=[]) is False
     assert metrics_disagree(user_facing=_v("worse"), causal_aligned=[{}]) is False, \
         "缺 status 字段的量不算 improved（不许把读不到当成测到了）"
+
+
+# -------------------------------------------- §4 那条"新认识"现在是机制，不是打印
+
+F4_PATCHES = {"payment": {"risk_error_rate": 0.6}, "inventory": {"downstream_retries": 5}}
+
+
+def test_patch_coverage_points_at_the_half_without_a_change_record() -> None:
+    """**故障补丁 ≠ 变更记录**：F4 改两个旋钮，而只有重试次数留下记录。
+
+    ⇒ "修完"仍有一半故障在，而且**只修一半可能比不修更差**（被撤掉的那个旋钮
+    可能正在兜住另一半）。这件事必须在**动手之前**由代码判定出来并告警，
+    而不是事后补一句解释、更不是写死某个旋钮名。
+    """
+    cov = patch_coverage(F4_PATCHES, propose([RECORD]))       # RECORD = inventory 那条
+    assert cov["verdict"] == "partial", "两改一 ⇒ 必须报'只覆盖一部分'"
+    assert cov["covered"] == [("inventory", "downstream_retries")]
+    assert cov["uncovered"] == [("payment", "risk_error_rate")], \
+        "没留下记录的那一半必须被**点名**（否则告警是句空话）"
+    assert cov["fraction"] == 0.5
+
+    full = patch_coverage(F4_PATCHES, [
+        Proposal(service="inventory", knob="downstream_retries",
+                 current_value="5", target_value="1", source="s"),
+        Proposal(service="payment", knob="risk_error_rate",
+                 current_value="0.6", target_value="0.0", source="s"),
+    ])
+    assert full["verdict"] == "full" and full["uncovered"] == []
+
+    # 没有补丁（baseline 之类）⇒ **不许**把"没有故障"说成"只修了一半"
+    assert patch_coverage({}, [])["verdict"] == "full"
+
+
+def test_outcome_never_hides_a_worse_symptom() -> None:
+    """结局标签必须**机器可读且不粉饰**：对 `worse` 只说 `action-ok-symptom-partial`，
+    读者会以为"部分改善" —— 那就是把一个灾难说成进展的软措辞（同 #61 的家族病）。
+    """
+    assert remediation_outcome(action_ok=True, symptom_status="improved",
+                               coverage="full") == "fixed"
+    assert remediation_outcome(action_ok=True, symptom_status="improved",
+                               coverage="partial") == "fixed-partial-coverage", \
+        "只修了一半却说 fixed，就是把'另一半还在'藏起来"
+    assert remediation_outcome(action_ok=True, symptom_status="worse",
+                               coverage="full") == "action-ok-symptom-worse"
+    assert remediation_outcome(action_ok=True, symptom_status="worse",
+                               coverage="partial") == "action-ok-symptom-worse-partial-coverage"
+    assert remediation_outcome(action_ok=True, symptom_status="unchanged",
+                               coverage="full") == "action-ok-symptom-unchanged"
+    assert remediation_outcome(action_ok=False, symptom_status="worse",
+                               coverage="partial") == "action-failed", \
+        "动作都没生效时，别拿症状说事"

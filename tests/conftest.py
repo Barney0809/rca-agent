@@ -38,6 +38,26 @@ SERVICES = {"order": ORDER_URL, "inventory": INVENTORY_URL, "payment": PAYMENT_U
 class World:
     """对被诊断系统的一层薄封装，让测试读起来像在说业务。"""
 
+    #: 三个服务的**全部**旋钮与默认值 —— 必须与 `world/common/runtime.py` 的 `Knobs` 逐字段一致。
+    #:
+    #: ⚠️ 这里为什么要**逐个列全**（harness-log #65，2026-09-27）：
+    #:    原来只列了一部分（order 5/7、inventory 4/7、payment 4/7），
+    #:    于是 `reset()` 文档里那句"把三个服务的参数恢复默认"**是假的** ——
+    #:    没列到的旋钮会悄悄留在世界里，污染后面的用例。
+    #:    （当时每个**故障**的补丁旋钮碰巧都被覆盖，所以看不出问题；一旦有人改动别的旋钮就现形。）
+    #:    "覆盖全不全"由一条**离线结构守卫**盯着（`tests/test_offline.py`），不靠人记得。
+    DEFAULTS = {
+        "order": {"pool_limit": 64, "pool_acquire_timeout_ms": 2000, "slow_op_ms": 0,
+                  "leak_mb_per_req": 0.0, "risk_latency_ms": 30, "risk_error_rate": 0.0,
+                  "downstream_retries": 1},
+        "inventory": {"pool_limit": 64, "pool_acquire_timeout_ms": 2000, "slow_op_ms": 0,
+                      "leak_mb_per_req": 0.0, "risk_latency_ms": 30, "risk_error_rate": 0.0,
+                      "downstream_retries": 1},
+        "payment": {"pool_limit": 64, "pool_acquire_timeout_ms": 2000, "slow_op_ms": 0,
+                    "leak_mb_per_req": 0.0, "risk_latency_ms": 30, "risk_error_rate": 0.0,
+                    "downstream_retries": 1},
+    }
+
     def __init__(self) -> None:
         self.client = httpx.Client(timeout=30.0)
 
@@ -54,24 +74,21 @@ class World:
     def knobs(self, service: str) -> dict:
         return self.client.get(f"{SERVICES[service]}/_knobs").json()
 
+    def snapshot(self) -> dict:
+        """三个服务当前的旋钮 —— 失败时把它打出来，别让复盘靠猜。"""
+        return {svc: self.knobs(svc) for svc in SERVICES}
+
     def reset(self) -> None:
         """把三个服务的参数恢复默认。
 
         测试凡是改过参数，**必须**在收尾时调用它，否则会污染后续测试 ——
         这类"测试之间互相影响"的问题排查起来极费时间。
+
+        ⚠️ 恢复的是 `DEFAULTS` 里的**全部**旋钮（不是"我这次改过的那几个"）：
+        只恢复一部分，等于把"我没动过的那些"交给上一个用例的良心。
         """
-        self.inject("order", {
-            "pool_limit": 64, "pool_acquire_timeout_ms": 2000, "slow_op_ms": 0,
-            "leak_mb_per_req": 0.0, "downstream_retries": 1,
-        })
-        self.inject("inventory", {
-            "pool_limit": 64, "pool_acquire_timeout_ms": 2000, "slow_op_ms": 0,
-            "downstream_retries": 1,
-        })
-        self.inject("payment", {
-            "pool_limit": 64, "pool_acquire_timeout_ms": 2000,
-            "risk_latency_ms": 30, "risk_error_rate": 0.0,
-        })
+        for service, patch in self.DEFAULTS.items():
+            self.inject(service, patch)
 
     def close(self) -> None:
         self.client.close()

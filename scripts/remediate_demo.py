@@ -170,6 +170,68 @@ def metrics_disagree(*, user_facing: dict, causal_aligned: list[dict]) -> bool:
             and all(str(m.get("status")) == "improved" for m in causal_aligned))
 
 
+def _svc_knob(p: object) -> tuple[str, str]:
+    """从 `Proposal`（或同形状的 dict）里取 `(service, knob)` —— 两种都认，方便离线测。"""
+    if isinstance(p, dict):
+        return str(p.get("service", "")), str(p.get("knob", ""))
+    return str(getattr(p, "service", "")), str(getattr(p, "knob", ""))
+
+
+def patch_coverage(patches: dict, proposals: list) -> dict:
+    """**故障的补丁**里有多少个旋钮被提案覆盖了？
+
+    ⚠️ 为什么要有这一步（HANDOFF §4 那条"新认识"，现在做成**机制**而不是一句打印）：
+
+      故障补丁与变更记录**不是一回事**：补丁是"实际改了什么"，变更记录只是
+      "现实世界里会留下痕迹的那部分"（注入器的原话）。M5 的铁律是**不猜修法** ——
+      只依据变更记录提案。两者差额 ⇒ 这次**只覆盖故障的一部分**。
+
+      F4 就是这么设计的：补丁改两个旋钮（`inventory.downstream_retries` 有记录、
+      `payment.risk_error_rate` 没有），于是"修完"仍然有一半故障在。
+      而**只修一半可能比不修更差**（被撤掉的那个旋钮可能正在兜住另一半）——
+      所以必须在**动手之前**就把这件事告警出来，而不是事后补一句解释。
+
+    ⚠️ 覆盖是**按 (服务, 旋钮)** 算的，不看值：`Proposal` 已经带着翻译好的旋钮名。
+    ⚠️ 没有补丁（例如 baseline 场景）时返回 `full` —— 不许把"没有故障"说成"只修了一半"。
+    """
+    want = sorted({(str(svc), str(knob)) for svc, knobs in (patches or {}).items()
+                   for knob in (knobs or {})})
+    got = {_svc_knob(p) for p in proposals or []}
+    covered = [x for x in want if x in got]
+    uncovered = [x for x in want if x not in got]
+    return {
+        "patched": want,
+        "covered": covered,
+        "uncovered": uncovered,
+        "fraction": round(len(covered) / len(want), 3) if want else 1.0,
+        "verdict": "full" if not uncovered else "partial",
+    }
+
+
+def remediation_outcome(*, action_ok: bool, symptom_status: str, coverage: str) -> str:
+    """把「动作 / 症状 / 覆盖」三件事压成一个**机器可读**的结局标签。
+
+    ⚠️ 为什么要一个函数（#64 的教训）：这个标签原来是一句写死的三元表达式，
+      对 `worse` 结果只会说 `action-ok-symptom-partial`（"部分"听起来像"部分改善"）——
+      措辞软到能把灾难读成进展。抽成函数才能离线测、才能配变异体。
+
+    词表（自描述，谁都读得懂）：
+
+      `action-failed`                                    动作没生效（其余不论）
+      `fixed`                                            动作生效 + 症状改善 + **全覆盖**
+      `fixed-partial-coverage`                           动作生效 + 症状改善，但只覆盖了一部分故障
+      `action-ok-symptom-<status>`                       动作生效、症状 **没有** 改善（worse/unchanged/…）
+      `…-partial-coverage`                               再叠上"只覆盖了一部分"
+
+    ⚠️ 症状改善时也**必须**带上覆盖信息：只修了一半却说 `fixed`，就是把
+      "另一半还在"这件事藏起来。
+    """
+    if not action_ok:
+        return "action-failed"
+    base = "fixed" if str(symptom_status) == "improved" else f"action-ok-symptom-{symptom_status}"
+    return f"{base}-partial-coverage" if str(coverage) == "partial" else base
+
+
 def measure(orders: int) -> dict:
     before = read_world()
     sent, ok = drive_traffic(orders)
@@ -266,6 +328,19 @@ def main() -> int:
         print(f"     · {p.describe()}")
     report["proposals"] = [p.to_dict() for p in proposals]
 
+    # ★ 覆盖：**动手之前**就量清楚"这次能修到故障的几分之几"（HANDOFF §4 的机制化）
+    cov = patch_coverage(_fault_patches(args.fault), proposals)
+    report["coverage"] = cov
+    print(f"     · 覆盖：{len(cov['covered'])}/{len(cov['patched'])} 个旋钮（{cov['verdict']}）")
+    if cov["verdict"] == "partial":
+        print("     ⚠️ **这次只覆盖故障的一部分** —— 补丁里有、但没有可用的变更记录的那部分"
+              f"**不会被提案**（M5 不猜修法）："
+              f"{['.'.join(x) for x in cov['uncovered']]}")
+        print("        ⇒ 预期是**部分修复**，而且症状**可能反而更差**"
+              "（被撤掉的那个旋钮可能正在兜住另一半故障）")
+        print("        ⇒ 要**全量**恢复，请走**人的那扇门**："
+              f".\\.venv\\Scripts\\python.exe scripts\\inject_fault.py revert {args.fault}")
+
     print("\n  ── 执行（经被批准的 MCP 门；无人审批则不执行）──")
     applied: list[dict] = []
     for p in proposals:
@@ -360,8 +435,8 @@ def main() -> int:
                 "也是把失败订单救回来的机制：撤掉它，流量降下来，被救的订单也没了"
                 if _disagree else "两把尺子方向一致（或都没改善）"),
     }
-    report["outcome"] = ("fixed" if symptom_ok else
-                         ("action-ok-symptom-partial" if action_ok else "action-failed"))
+    report["outcome"] = remediation_outcome(action_ok=action_ok, symptom_status=v_ok["status"],
+                                            coverage=cov["verdict"])
     EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
     EVIDENCE.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8", newline="\n")
@@ -382,14 +457,15 @@ def main() -> int:
     print(f"     ② 症状修好了吗：{_wording.get(v_ok['status'], v_ok['status'])}"
           f"（{v_ok.get('before')} → {v_ok.get('after')}）")
     if action_ok and not symptom_ok:
-        print(f"        原因：注入的补丁里有的**没有变更记录** ⇒ M5 不提案（不猜修法）。"
-              f"本次提案覆盖：{sorted(p['knob'] for p in report['proposals'])}")
-        # ⚠️ 旋钮要**按服务读**：扁平读法会把 payment 的读成 None（第一次 live 跑就是这么误报的）
-        _rate = after["knobs"].get("payment", {}).get("risk_error_rate")
-        _recorded = any("risk_error_rate" in str(r.get("key", "")) for r in changes["records"])
-        print(f"        世界里仍然偏着的旋钮：payment.risk_error_rate={_rate}"
-              f"（{'变更记录里有它，但这次没有被提案' if _recorded else '这个补丁那次场景没有留下记录'}）")
-        if v_ok["status"] == "worse":
+        print(f"        本次提案覆盖：{['.'.join(x) for x in cov['covered']]}"
+              f"（补丁共 {len(cov['patched'])} 个旋钮）")
+        # ⚠️ "世界里还偏着的旋钮"由**覆盖率**推出来，不再写死任何旋钮名
+        #    （上一版硬编码 `payment.risk_error_rate`，换个故障就是空话）
+        for svc, knob in cov["uncovered"]:
+            print(f"        世界里仍然偏着的旋钮：{svc}.{knob}="
+                  f"{after['knobs'].get(svc, {}).get(knob)}"
+                  f"（补丁里有它，但没有可用的变更记录 ⇒ M5 不提案）")
+        if v_ok["status"] == "worse" and cov["uncovered"]:
             print("        ⚠️ **只覆盖故障的一部分时，症状可能反而更差** —— 这既不是修好了，"
                   "也不是什么都没做。")
             print("           要**全量**恢复，请走人的那扇门："
@@ -409,6 +485,20 @@ def main() -> int:
 
 def _to_int(x: float) -> int:
     return int(round(x))
+
+
+def _fault_patches(fault_id: str) -> dict:
+    """取注入器里**这个故障的完整补丁**（`changes` 只是其中"现实世界会留痕"的那部分）。
+
+    ⚠️ 依赖注入器那份定义是**有意为之**：覆盖率的分子分母必须都来自同一个权威 ——
+       "补丁"由 `scripts/inject_fault.py` 定义，"提案"由变更记录决定，
+       **硬编码旋钮名就又会漂**（上一版就是写死 `risk_error_rate` 才漏掉通用性）。
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from inject_fault import FAULTS                                     # noqa: PLC0415
+
+    fault = FAULTS.get(fault_id)
+    return {svc: dict(knobs) for svc, knobs in (fault.patches if fault else {}).items()}
 
 
 def _latest_changes() -> dict:

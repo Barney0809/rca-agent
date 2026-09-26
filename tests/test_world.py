@@ -118,16 +118,44 @@ def test_regression_5_stock_is_not_drained(clean_world):
       2) 库存按每个请求的实际数量精确扣减
     """
     n = 60
-    assert clean_world.knobs("order")["risk_latency_ms"] == 30  # 确认干净起点
+    # ⚠️ "干净起点" 必须**逐个检查这个用例真正依赖的旋钮**，不能只查一个：
+    #    2026-09-27 实测过一次全量跑里这条用例红，而且是**以循环里的 502 失败**
+    #    （无法复现）。原因很可能是世界带着别的用例留下的故障（F4 改的是
+    #    `inventory.downstream_retries` + `payment.risk_error_rate`）——
+    #    而这里原来只查 `order.risk_latency_ms`（F4 根本不动它）⇒ 断言照样过，
+    #    失败却出现在几十行之后，看起来像个谜。
+    #    ⇒ 把前提写成**自解释的**：不干净就当场说清是哪个旋钮还偏着。
+    for svc, knob, want in (("order", "risk_latency_ms", 30),
+                            ("inventory", "downstream_retries", 1),
+                            ("payment", "risk_latency_ms", 30),
+                            ("payment", "risk_error_rate", 0.0)):
+        got = clean_world.knobs(svc)[knob]
+        assert got == want, (
+            f"世界不干净：{svc}.{knob} = {got}，期望 {want} —— "
+            f"上一个用例可能没把参数复位（`clean_world.reset()` 漏了这个旋钮？），"
+            f"或者故障还开着。\n"
+            f"这条断言的意义就是把「带着故障跑」变成一句看得懂的失败，"
+            f"而不是循环里那个看不出原因的 502。"
+        )
 
     first_remaining = None
     last_remaining = None
 
     for i in range(n):
         resp = clean_world.place_order(qty=1)
-        assert resp.status_code == 200, (
-            f"第 {i + 1} 个请求就失败了（HTTP {resp.status_code}）：{resp.text[:200]}\n"
+        if resp.status_code != 200:
+            # ⚠️ 失败时**当场把三个服务的旋钮打出来**（harness-log #65）：
+            #    2026-09-27 这条用例红过一次，报的就是这一行，但那次没留下输出 ⇒
+            #    "世界当时是什么状态"只能靠翻 compose 日志猜，查了很久还没定论。
+            #    教训：**失败必须自解释**，别让复盘依赖"当时恰好保存了输出"。
+            pytest.fail(
+                f"第 {i + 1} 单失败（HTTP {resp.status_code}）：{resp.text[:200]}\n"
+                f"三个服务当前的旋钮：{clean_world.snapshot()}\n"
+                f"读法：payment.risk_error_rate > 0 ⇒ 世界是脏的（F4 的签名）；"
+                f"inventory.downstream_retries 是字符串 ⇒ #62 的类型坑；"
+                f"order.pool_limit < 64 ⇒ F2 的残留。"
             f"最可能的原因：库存种子被调小，或初始化改回了『仅在键不存在时写』。"
+                f"全都正常却仍然 5xx ⇒ 那是世界的真缺陷：记下来，别只重跑一次了事。"
         )
         remaining = resp.json()["detail"]["remaining"]
         if first_remaining is None:

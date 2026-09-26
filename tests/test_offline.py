@@ -990,3 +990,65 @@ def test_a_group_without_a_harness_log_id_is_flagged(tmp_path):
         root=tmp_path,
     )
     assert any("harness_log" in p_ for p_ in problems), problems
+
+
+# ================================================================
+# #65：集成用例的"干净起点"必须**真的**是干净的
+# ================================================================
+
+def _class_field_names(path: Path, cls: str) -> list[str]:
+    """取某个类里的**字段名**（用于 `world/common/runtime.py` 的 `Knobs`）。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == cls:
+            return [n.target.id for n in node.body if isinstance(n, ast.AnnAssign)]
+    return []
+
+
+def _literal_assignment(path: Path, cls: str, name: str) -> dict:
+    """取 `class cls` 里的 `name = {...}` 字面量（用于 `tests/conftest.py` 的 `World.DEFAULTS`）。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == cls:
+            for stmt in node.body:
+                if (
+                    isinstance(stmt, ast.Assign)
+                    and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and stmt.targets[0].id == name
+                ):
+                    return ast.literal_eval(stmt.value)
+    return {}
+
+
+def test_world_reset_covers_every_knob():
+    """#65：`World.reset()` 说"把三个服务的参数恢复默认"，那就必须**覆盖每一个旋钮**。
+
+    历史（2026-09-27）：它当时只复位了 order 5/7、inventory 4/7、payment 4/7 ——
+    这句承诺是**假的**：没列到的旋钮会悄悄留在世界里，污染后面的用例。
+    当时看不出来，是因为每个**故障**的补丁旋钮碰巧都被覆盖了；
+    一旦有人（或某个 live 场景）改动别的旋钮，就会以一条**看不出原因**的失败出现。
+
+    这条守卫把两边的字段清单静态对上（读源码，**不需要 Docker**）：
+
+        `world/common/runtime.py` 的 `Knobs` 字段   vs   `tests/conftest.py` 的 `World.DEFAULTS`
+    """
+    root = Path(__file__).resolve().parent.parent
+    knob_fields = _class_field_names(root / "world" / "common" / "runtime.py", "Knobs")
+    defaults = _literal_assignment(root / "tests" / "conftest.py", "World", "DEFAULTS")
+
+    assert knob_fields, "没读出 Knobs 的字段 —— 守卫不能退化成空绿"
+    assert defaults, "没读出 World.DEFAULTS —— 守卫不能退化成空绿"
+    assert set(defaults) == {"order", "inventory", "payment"}, (
+        f"reset 覆盖的服务变了：{sorted(defaults)}"
+    )
+
+    for service, patch in defaults.items():
+        missing = [f for f in knob_fields if f not in patch]
+        extra = [k for k in patch if k not in knob_fields]
+        assert not missing, (
+            f"`World.reset()` 没复位 {service} 的这些旋钮：{missing} ⇒ "
+            f"上一个用例改过它们之后，值会**留在世界里**（harness-log #65）。"
+            f"补进 `DEFAULTS` 就对了 —— 别只补「我这次动过的」那几个。"
+        )
+        assert not extra, f"{service} 的 DEFAULTS 里有世界不存在的旋钮：{extra}"

@@ -1,5 +1,5 @@
 {
-  "ts": "2026-09-27T01:15:49+08:00",
+  "ts": "2026-09-27T00:06:15+08:00",
   "fault": "F4",
   "orders": 60,
   "world": {
@@ -9,10 +9,10 @@
   },
   "before": {
     "orders_sent": 60,
-    "orders_ok": 55,
-    "downstream_calls_delta": 136.0,
-    "downstream_calls_per_order": 2.27,
-    "error_calls_delta": 81.0,
+    "orders_ok": 52,
+    "downstream_calls_delta": 137.0,
+    "downstream_calls_per_order": 2.28,
+    "error_calls_delta": 85.0,
     "valid": true,
     "knobs": {
       "order": {
@@ -52,36 +52,10 @@
       "env_key": "W_INVENTORY_DOWNSTREAM_RETRIES",
       "current_value": "5",
       "target_value": "1",
-      "source": "2026-09-27T01:16:02+08:00 由 injector 注入：inventory.W_INVENTORY_DOWNSTREAM_RETRIES 1 → 5",
+      "source": "2026-09-27T00:06:28+08:00 由 injector 注入：inventory.W_INVENTORY_DOWNSTREAM_RETRIES 1 → 5",
       "reversible": true
     }
   ],
-  "coverage": {
-    "patched": [
-      [
-        "inventory",
-        "downstream_retries"
-      ],
-      [
-        "payment",
-        "risk_error_rate"
-      ]
-    ],
-    "covered": [
-      [
-        "inventory",
-        "downstream_retries"
-      ]
-    ],
-    "uncovered": [
-      [
-        "payment",
-        "risk_error_rate"
-      ]
-    ],
-    "fraction": 0.5,
-    "verdict": "partial"
-  },
   "applied": [
     {
       "proposal": {
@@ -91,7 +65,7 @@
         "env_key": "W_INVENTORY_DOWNSTREAM_RETRIES",
         "current_value": "5",
         "target_value": "1",
-        "source": "2026-09-27T01:16:02+08:00 由 injector 注入：inventory.W_INVENTORY_DOWNSTREAM_RETRIES 1 → 5",
+        "source": "2026-09-27T00:06:28+08:00 由 injector 注入：inventory.W_INVENTORY_DOWNSTREAM_RETRIES 1 → 5",
         "reversible": true
       },
       "applied": true,
@@ -131,10 +105,10 @@
   ],
   "after": {
     "orders_sent": 60,
-    "orders_ok": 16,
+    "orders_ok": 22,
     "downstream_calls_delta": 60.0,
     "downstream_calls_per_order": 1.0,
-    "error_calls_delta": 44.0,
+    "error_calls_delta": 38.0,
     "valid": true,
     "knobs": {
       "order": {
@@ -168,37 +142,37 @@
   },
   "precheck": {
     "symptom": "成功订单数",
-    "before": 55,
-    "after": 16,
+    "before": 52,
+    "after": 22,
     "sent_before": 60,
     "sent_after": 60,
     "ok": true,
     "status": "signal-in-both-states",
-    "why": "两态都有信号 ✓（故障态 55/60 真失败过；恢复态 16/60 有观测）"
+    "why": "两态都有信号 ✓（故障态 52/60 真失败过；恢复态 22/60 有观测）"
   },
   "verdict": {
     "successful_orders": {
       "status": "worse",
       "symptom": "成功订单数",
-      "before": 55,
-      "after": 16,
-      "delta": -39,
+      "before": 52,
+      "after": 22,
+      "delta": -30,
       "lower_is_better": false
     },
     "diagnostic_calls_per_order": {
       "status": "improved",
       "symptom": "（诊断量）每笔订单的下游调用次数",
-      "before": 227,
+      "before": 228,
       "after": 100,
-      "delta": -127,
+      "delta": -128,
       "lower_is_better": true
     },
     "diagnostic_error_calls": {
       "status": "improved",
       "symptom": "（诊断量）下游错误调用增量",
-      "before": 81.0,
-      "after": 44.0,
-      "delta": -37.0,
+      "before": 85.0,
+      "after": 38.0,
+      "delta": -47.0,
       "lower_is_better": true
     }
   },
@@ -206,5 +180,5 @@
     "value": true,
     "why": "用户可感的症状（成功订单数）没有变好，而与故障因果对齐的量（下游放大倍数 / 错误调用）变好了 —— 重试既是放大流量的机制，也是把失败订单救回来的机制：撤掉它，流量降下来，被救的订单也没了"
   },
-  "outcome": "action-ok-symptom-worse-partial-coverage"
+  "outcome": "action-ok-symptom-partial"
 }
