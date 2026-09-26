@@ -47,6 +47,12 @@ test:
 check: lint test
 
 # ---- offline gate: exactly what CI runs, minus the Docker job ----
+#
+# ORDER NOTE: if docs/harness-log.md (or anything the public page is built from)
+# changed, run `make demo` BEFORE `make ci`. The gate compares the COMMITTED page
+# against a fresh build, so a stale page turns two tests red for a reason that has
+# nothing to do with the change you were making. `make ci` deliberately does NOT
+# regenerate the page itself: doing that would hide a page that was never rebuilt.
 
 ci:
 	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci.ps1
