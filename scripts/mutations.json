@@ -2121,7 +2121,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**79 条**（其中 **69 条**由变异测试证明能变红，**10 条**",
+        "find": "封堵清单：**80 条**（其中 **69 条**由变异测试证明能变红，**11 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
