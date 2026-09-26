@@ -798,8 +798,8 @@
         "id": "wire2-drop-the-tier-on-reload",
         "desc": "#34: stop restoring pricing_tier in load_report, so reloaded reports lose the tariff warning.",
         "file": "eval/runner.py",
-        "find": "        pricing_tier=data.get(\"pricing_tier\", \"\"),\n    )",
-        "replace": "    )",
+        "find": "        pricing_tier=data.get(\"pricing_tier\", \"\"),",
+        "replace": "        pricing_tier=\"\",",
         "expect_red": [
           "tests/test_eval.py::test_pricing_tier_survives_a_save_load_round_trip"
         ]
@@ -1910,6 +1910,48 @@
       }
     ]
   },
+  "run_config_is_recorded": {
+    "harness_log": [
+      "#66"
+    ],
+    "why": "#66 (2026-09-27): the number that changes accuracy was not in the archive, and the documentation promised knobs nothing reads. Three separate lies measured in one sitting: (a) results.json recorded model/mode/rounds but NOT max_steps -- the very knob #13 proved swings accuracy from 0% to 100%, so an archive could not say what configuration produced it; (b) the CLI default was 14 while docs/00's protocol (and the D12/D15 numbers) use 22, so a stranger following the docs silently gets an incomparable run; (c) .env.example listed 12 variables and SIX of them are read by no code anywhere (RCA_MAX_STEPS, RCA_TOKEN_BUDGET, RCA_MONEY_BUDGET_YUAN, RCA_ALLOW_HOLDOUT, RCA_QUARANTINE_DIR, RCA_QUARANTINE_TTL_HOURS) -- setting them does nothing and reports nothing.",
+    "tests": [
+      "tests/test_eval.py",
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "cfg-a-archive-drops-the-step-budget",
+        "desc": "Stop writing max_steps into results.json, the exact state that shipped: the archive then cannot say which step budget produced its accuracy, while #13 had already measured that this knob alone moves accuracy from 0% to 100%.",
+        "file": "eval/runner.py",
+        "find": "            \"max_steps\": self.max_steps,",
+        "replace": "            \"max_steps_removed_by_mutation\": self.max_steps,",
+        "expect_red": [
+          "tests/test_eval.py::test_report_records_the_run_configuration"
+        ]
+      },
+      {
+        "id": "cfg-b-default-budget-drifts-back-to-14",
+        "desc": "Put the stale pre-D7.6 default (14) back, so anyone running the documented command gets a different configuration than every archived number -- the silent incomparability that #13 is about.",
+        "file": "eval/runner.py",
+        "find": "DEFAULT_MAX_STEPS = int(os.environ.get(\"RCA_MAX_STEPS\", \"22\"))",
+        "replace": "DEFAULT_MAX_STEPS = int(os.environ.get(\"RCA_MAX_STEPS\", \"14\"))",
+        "expect_red": [
+          "tests/test_eval.py::test_default_step_budget_matches_the_documented_protocol"
+        ]
+      },
+      {
+        "id": "cfg-c-doc-promises-a-dead-knob",
+        "desc": "Add one more variable to .env.example that no code reads, the smallest version of the six that were already there: documented, settable, and completely inert -- with no error to tell you so.",
+        "file": ".env.example",
+        "find": "# 若不想设密码，留空即可。\nW_REDIS_PASSWORD=",
+        "replace": "# 若不想设密码，留空即可。\nRESET_SEED_FOR_HOLDOUT=1\nW_REDIS_PASSWORD=",
+        "expect_red": [
+          "tests/test_offline.py::test_env_example_promises_only_what_the_code_reads"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1923,7 +1965,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**345 passed / 1 skipped**",
+        "find": "**348 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1933,7 +1975,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**50 组 / 137 个变异体，全部 SEALED**",
+        "find": "**51 组 / 140 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1943,7 +1985,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**75 条**（其中 **64 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**76 条**（其中 **65 条**由变异测试证明能变红，**11 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"

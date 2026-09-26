@@ -1222,6 +1222,52 @@ def test_report_records_the_pricing_tier():
     assert r.to_dict()["pricing_tier"] == "peak"
 
 
+def test_report_records_the_run_configuration(tmp_path):
+    """#66：归档必须**自解释** —— 决定"准确率"的运行参数要写进 results.json。
+
+    历史：#13 证明 `max_steps` 会改变"准确率"（8 → 0%、14 → 100%），
+    而 2026-09-27 发现**归档里根本没有这个字段**（也没有 `cross_exam_steps` / `guard`）⇒
+    拿到一份 results.json 无法自证"它是在什么配置下跑的"，
+    也就无法判断两次运行**能不能比**（这正是 D12/D15 那些数字的前提）。
+
+    两个方向都要守：**新归档必须记**、**老归档必须仍能读回**（不许因为缺字段整份作废）。
+    """
+    import json
+
+    from eval.runner import Report, load_report
+
+    r = Report(model="m", mode="live", rounds=1, started_at="t",
+               max_steps=22, cross_exam_steps=22, guard=True)
+    d = r.to_dict()
+    assert d["max_steps"] == 22 and d["cross_exam_steps"] == 22 and d["guard"] is True, \
+        f"运行参数必须进归档，实际：{ {k: d.get(k) for k in ('max_steps', 'cross_exam_steps', 'guard')} }"
+
+    # 老归档（D12/D15 那些）没有这三个字段 ⇒ 必须仍能读回，且默认值明确是"没记录"
+    old = tmp_path / "results.json"
+    old.write_text(json.dumps({
+        "model": "m", "mode": "live", "rounds": 1, "started_at": "t",
+        "pricing_tier": "off_peak", "aggregate": {}, "attempts": [],
+    }, ensure_ascii=False), encoding="utf-8")
+    back = load_report(old)
+    assert back.max_steps == 0, "0 = 老归档没记录（不是'0 步'）"
+    assert back.guard is False
+
+
+def test_default_step_budget_matches_the_documented_protocol():
+    """#66：`--max-steps` 的**默认值**必须等于文档里的协议值，否则陌生人拿到的是另一个配置。
+
+    2026-09-27 实测发现同一个数有**三份**：代码默认 14、文档协议 22、
+    `.env.example` 里还写着 20（而没有任何代码读它）。#13 已经证明这个数会改变准确率 ⇒
+    "默认值跟协议不一致"意味着：照文档跑出来的数字与归档里的数字**不可比**。
+    """
+    from eval.runner import DEFAULT_MAX_STEPS
+
+    assert DEFAULT_MAX_STEPS == 22, (
+        f"默认步数预算是 {DEFAULT_MAX_STEPS}，而 docs/00 的协议是 22"
+        f"（#22：枚举任务实测最慢需 14 步 ⇒ 留余量用 22）"
+    )
+
+
 def test_report_prints_the_pricing_tier(capsys):
     from eval.runner import Report, print_report
 

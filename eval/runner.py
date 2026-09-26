@@ -49,6 +49,18 @@ from rca.tools import RunContext  # noqa: E402
 from eval.scenarios import SCENARIOS, ScenarioScore  # noqa: E402
 RUNS_DIR = ROOT / "runs"
 
+#: LLM 轮次预算的默认值（#66）。
+#:
+#: ⚠️ 三个数字必须**只有一个**（2026-09-27 实测发现有三份，而且互相不一致）：
+#:    · 代码里的默认值原来是 **14**（那是 #13 时代"实测最慢需 9 步"的旧数），
+#:    · docs/00 与交接文档里的**协议是 22**（#22：枚举任务实测最慢需 14 步 ⇒ 留余量用 22），
+#:    · `.env.example` 里还写着 `RCA_MAX_STEPS=20`，而**全仓库没有任何代码读它**。
+#:   #13 已经证明这个数会**改变"准确率"**（8 → 0%、14 → 100%），所以"默认值跟协议不一致"
+#:   不是小事：一个陌生人照文档跑 `eval/runner.py --agent multi` 会拿到**另一个配置**的数字。
+#:   ⇒ 现在：默认 = 环境变量 `RCA_MAX_STEPS`（真的被读了）> 22（协议值），
+#:     并且**写进 results.json**（`max_steps` 字段），让归档自解释。
+DEFAULT_MAX_STEPS = int(os.environ.get("RCA_MAX_STEPS", "22"))
+
 
 # ================================================================
 # 数据根目录：本机 runs/ vs 便携重放包
@@ -269,6 +281,14 @@ class Report:
     #   为什么要有：一次真实的 402（余额不足）曾让整轮运行抛异常，
     #   已完成的尝试跟着一起丢 —— 那些尝试是**花了钱**的。
     aborted_reason: str = ""
+    # ★ **运行参数**（#66，2026-09-27）：决定"准确率"的那些旋钮必须写进归档。
+    #   #13 已经证明 `max_steps` 会改变准确率（8 → 0%、14 → 100%），
+    #   可归档里**根本没有这个字段** ⇒ 拿到一份 `results.json` 无法自证
+    #   "它是在什么配置下跑的"，也就无法判断两次运行**能不能比**。
+    #   0 / False = 老归档没记录（**不是**"0 步"）—— 读取端必须能容忍。
+    max_steps: int = 0
+    cross_exam_steps: int = 0
+    guard: bool = False
 
     # ---- 聚合 ----
     def agg(self) -> dict:
@@ -371,6 +391,10 @@ class Report:
             "mode": self.mode,
             "rounds": self.rounds,
             "started_at": self.started_at,
+            # #66：这三个是**运行参数**，缺了归档就没法自解释
+            "max_steps": self.max_steps,
+            "cross_exam_steps": self.cross_exam_steps,
+            "guard": self.guard,
             "aggregate": self.agg(),
             "attempts": [a.to_dict() for a in self.attempts],
         }
@@ -385,7 +409,7 @@ def run(
     fault_ids: list[str] | None = None,
     rounds: int = 3,
     model: str | None = None,
-    max_steps: int = 14,
+    max_steps: int = DEFAULT_MAX_STEPS,
     cross_exam_steps: int = 14,
     mode: str = "live",
     agent: str = "baseline",
@@ -421,6 +445,10 @@ def run(
     report.agent = agent
     from rca.llm.provider import is_peak_hour
     report.pricing_tier = "peak" if is_peak_hour() else "off_peak"
+    # #66：把**运行参数**记进归档 —— 否则这份 results.json 无法自证"在什么配置下跑的"
+    report.max_steps = max_steps
+    report.cross_exam_steps = cross_exam_steps
+    report.guard = bool(guard)
 
     if not runs:
         print("没有找到可用场景。先跑：python scripts/inject_fault.py scenario F1")
@@ -641,6 +669,10 @@ def load_report(path: Path) -> Report:
         #    那条"只与同时段比较成本"的警告会**消失** —— 而重载正是我做比较时走的路径。
         #    这是 #18 的同族：**字段存了，但没接上**。
         pricing_tier=data.get("pricing_tier", ""),
+        # #66：老归档没有这三个字段 ⇒ 用 0/False 兜底（不许因为"读不回来"就整份作废）
+        max_steps=data.get("max_steps", 0),
+        cross_exam_steps=data.get("cross_exam_steps", 0),
+        guard=data.get("guard", False),
     )
     report.attempts = [Attempt(**a) for a in data["attempts"]]
     return report
@@ -1165,9 +1197,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--faults", default=None, help="逗号分隔，如 F1,F2；默认全部")
     p.add_argument("--rounds", type=int, default=3)
     p.add_argument("--model", default=None, help="默认取配置里的便宜模型")
-    p.add_argument("--max-steps", type=int, default=14,
-                   help="LLM 轮次上限；实测最慢场景需 9 步，故默认 14。"
-                        "⚠️ 比较 baseline 与 multi 时必须用同一个值")
+    p.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS,
+                   help=f"LLM 轮次上限；默认 {DEFAULT_MAX_STEPS}"
+                        "（#22：枚举任务实测最慢需 14 步，留余量统一用 22）。"
+                        "⚠️ 比较 baseline 与 multi 时必须用同一个值（#13）")
     # ⚠️ 这个旋钮必须存在且必须接线（harness-log #17）。
     #    原先交叉质证的步数预算在 coordinator.py 里写死 4，--max-steps 到不了它；
     #    实测中指标 Agent 正好用满 4 步仍没产出结论 → 收敛率 0%，

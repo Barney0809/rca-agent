@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import httpx
@@ -1052,3 +1053,65 @@ def test_world_reset_covers_every_knob():
             f"补进 `DEFAULTS` 就对了 —— 别只补「我这次动过的」那几个。"
         )
         assert not extra, f"{service} 的 DEFAULTS 里有世界不存在的旋钮：{extra}"
+
+
+# ================================================================
+# #66：文档里承诺的旋钮，必须要么**真的接线**，要么明确标注"尚未接线"
+# ================================================================
+
+def test_env_example_promises_only_what_the_code_reads():
+    """`.env.example` 里每个变量：要么**真的被代码读到**，要么**明确标注「尚未接线」**。
+
+    历史（2026-09-27 实测）：12 个变量里有 **6 个全仓库没人读** ——
+    `RCA_MAX_STEPS` / `RCA_TOKEN_BUDGET` / `RCA_MONEY_BUDGET_YUAN` /
+    `RCA_ALLOW_HOLDOUT` / `RCA_QUARANTINE_DIR` / `RCA_QUARANTINE_TTL_HOURS`。
+    设了它们**什么都不会发生，而且没有任何报错** —— 这正是本项目最防的那一类静默失真
+    （同族：#60 的 env 名没翻译成旋钮名、#62 的类型坑）。
+    其中最扎眼的是 `RCA_MAX_STEPS`：`max_steps` 是**会改变"准确率"的数**（#13），
+    而它的代码默认值、文档协议值、和这里写的值**三个都不一样**。
+
+    这条守卫**不要求**把六个都接线（有些是设计里的东西），它要求的是**不许含糊**：
+    没接线的就写「尚未接线」，接线的就必须真出现在代码里。
+    """
+    root = Path(__file__).resolve().parent.parent
+    text = (root / ".env.example").read_text(encoding="utf-8")
+
+    # 收集每个变量名，以及它上一行/本行的注释（标注就写在那里）
+    entries: list[tuple[str, str]] = []
+    pending_comment = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            pending_comment += stripped
+            continue
+        m = re.match(r"^([A-Z][A-Z0-9_]{2,})\s*=", stripped)
+        if m:
+            entries.append((m.group(1), pending_comment + stripped))
+        pending_comment = ""
+
+    assert len(entries) >= 8, f"只从 .env.example 读到 {len(entries)} 个变量 —— 守卫不能退化成空绿"
+
+    # 「被读」= 该变量名出现在代码/编排文件里（排除 .env 本身、文档、生成物）
+    corpus: list[str] = []
+    for sub in ("src", "eval", "scripts", "world", "tests", ".github"):
+        for p in (root / sub).rglob("*"):
+            if p.is_file() and p.suffix in (".py", ".ps1", ".yml", ".yaml", ".toml", ".cfg"):
+                corpus.append(p.read_text(encoding="utf-8", errors="replace"))
+    for name in ("docker-compose.yml", "Makefile"):
+        p = root / name
+        if p.exists():
+            corpus.append(p.read_text(encoding="utf-8", errors="replace"))
+
+    unmarked_dead: list[str] = []
+    for key, context in entries:
+        if any(key in c for c in corpus):
+            continue
+        if "尚未接线" in context:
+            continue
+        unmarked_dead.append(key)
+
+    assert not unmarked_dead, (
+        f"这些变量在 `.env.example` 里承诺了，但**全仓库没有任何代码读它们**，"
+        f"也没标注「尚未接线」：{unmarked_dead} ⇒ 设了不会生效，还不报错。\n"
+        f"两种改法二选一：① 真的接上；② 在那几行前加一句「⚠️ 尚未接线（设了不会生效）」。"
+    )
