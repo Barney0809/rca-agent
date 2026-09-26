@@ -460,7 +460,9 @@ def revert_patches(client: httpx.Client, fault: Fault) -> dict[str, dict]:
         for k in patch:
             revert[k] = POOL_DEFAULT[svc] if k == "pool_limit" else DEFAULTS[k]
         try:
-            r = client.post(f"{SERVICES[svc]}/_inject", json=revert, timeout=10.0)
+            # 自报来源（ADR-0009）：撤销也是一次改动，留空就是"匿名改动"
+            r = client.post(f"{SERVICES[svc]}/_inject",
+                            json={**revert, "by": f"injector:revert:{fault.id}"}, timeout=10.0)
             changed_by_service[svc] = r.json().get("changed", {})
         except Exception as e:
             changed_by_service[svc] = {"__error__": str(e)}

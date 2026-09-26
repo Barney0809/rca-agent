@@ -199,6 +199,24 @@ def rescore_acc(data: dict) -> float | None:
     return ok / len(at)
 
 
+def acc_band_now(data: dict) -> list[float]:
+    """逐轮准确率（**按当前判据**）的 min–max —— 就是页面/结论要用的**噪声带**（#46）。
+
+    ⚠️ 为什么必须按**当前判据**算：存档里的 `accuracy_band` 是当时那版判据的产物，
+    用它给现在的结论加限定，等于拿旧尺子量新数字（#48 的同一个坑）。
+    """
+    by_round: dict[int, list] = {}
+    for a in data.get("attempts", []):
+        by_round.setdefault(int(a.get("round_no", 0)), []).append(a)
+    accs: list[float] = []
+    for _, atts in sorted(by_round.items()):
+        v = rescore_acc({**data, "attempts": atts})
+        if v is None:
+            v = sum(1 for a in atts if a["correct"]) / len(atts)
+        accs.append(v)
+    return [min(accs), max(accs)] if accs else [0.0, 0.0]
+
+
 def totals(data: dict) -> dict:
     at = data["attempts"]
     n = len(at)
@@ -212,6 +230,8 @@ def totals(data: dict) -> dict:
         "acc_now": acc_now,
         "acc_changed": acc_now is not None
         and abs(acc_now - sum(1 for a in at if a["correct"]) / n) > 1e-9,
+        # 噪声带（#46）：逐轮准确率的 min–max，**按当前判据**算
+        "acc_band_now": acc_band_now(data),
         "steps": sum(a["steps"] for a in at) / n,
         "cost": sum(a["cost_yuan"] for a in at) / n,
         "conv": sum(1 for a in at if a["finished"]) / n,
@@ -331,6 +351,21 @@ def build() -> str:
     b_eff = b["acc_now"] if b.get("acc_now") is not None else b["acc"]
     m_eff = m["acc_now"] if m.get("acc_now") is not None else m["acc"]
     acc_delta_pp = (m_eff - b_eff) * 100
+
+    # ★ **噪声带**：偏离多少才敢说"真的差"（#46 的量化版，2026-09-27 实测）：
+    #   ① 存档里 3 轮的**轮间波动**（页面一直显示的那个带）；
+    #   ② 本轮另外量到的一个更硬的下限：**同配置重跑，单场景准确率能差 20 个百分点**
+    #      （F4 上三轮：73.3% / 93.3% / 73.3%），而 n=15 的二项 95% 区间宽 29–41pp。
+    #   ⇒ 结论里的幅度**必须**连同这个带一起说，否则就是把噪声当结论（#46 本身）。
+    band_pp = max(
+        (b.get("acc_band_now") or [b_eff, b_eff])[1] - (b.get("acc_band_now") or [b_eff, b_eff])[0],
+        (m.get("acc_band_now") or [m_eff, m_eff])[1] - (m.get("acc_band_now") or [m_eff, m_eff])[0],
+    ) * 100
+    noise_note = ""
+    if abs(acc_delta_pp) <= max(band_pp, 1e-9):
+        noise_note = (f"<span class='dim'>（但这个差<b>落在轮间波动 {band_pp:.1f} 个百分点之内</b> ⇒ "
+                      f"只能说「没有优势」，<b>不能</b>说「确实更差」—— 见 #46）</span>")
+
     if abs(acc_delta_pp) < 0.05:
         headline = "多 Agent 没有可测的价值增量。"
         verdict_word = "准确率<strong>没有变化</strong>"
@@ -340,6 +375,7 @@ def build() -> str:
     else:
         headline = "多 Agent <strong>更准</strong>，但要为此付出高得多的成本。"
         verdict_word = f"准确率<strong>高了 {acc_delta_pp:.1f} 个百分点</strong>"
+    verdict_word += noise_note
     print(f"  结论措辞（按当前判据）：{headline}／{verdict_word}")
 
     # ★ 两个口径：**存档当时的判定** vs **按当前判据重算**（#48）

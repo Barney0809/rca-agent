@@ -2033,6 +2033,37 @@
         "expect_red": [
           "tests/test_offline.py::test_inject_history_never_touches_the_service_log"
         ]
+      },
+      {
+        "id": "hist-c-anonymous-mutation",
+        "desc": "Drop the self-reported `by` from the test fixture, so every knob change it makes lands in the history as anonymous. That is precisely the state in which #65 died: the instrument exists, the world is provably dirty, and the record cannot say who did it.",
+        "file": "tests/conftest.py",
+        "find": "        payload[\"by\"] = by or f\"tests:{os.environ.get('PYTEST_CURRENT_TEST', 'unknown')}\"",
+        "replace": "        payload[\"by\"] = by",
+        "expect_red": [
+          "tests/test_world.py::test_inject_history_records_who_changed_the_knobs"
+        ]
+      }
+    ]
+  },
+  "demo_qualifies_its_own_claim": {
+    "harness_log": [
+      "#46"
+    ],
+    "why": "#46 (2026-09-27, quantified): the public page said 'accuracy is 4.8 percentage points lower' with no mention of the noise band -- and the same configuration re-run differs by up to 20 percentage points on a single scenario (F4: 73.3% / 93.3% / 73.3%), while the archive's own per-round band under the current criterion is 14.3pp. A 4.8pp gap sits inside that band, so the defensible statement is 'no advantage', never 'worse'. This mutation removes the band qualification the renderer just started emitting.",
+    "tests": [
+      "tests/test_deliverable.py"
+    ],
+    "mutations": [
+      {
+        "id": "demo-c-drops-the-noise-caveat",
+        "desc": "Stop appending the noise-band caveat to the accuracy delta, restoring the sentence that read as a conclusion: '4.8 percentage points lower' with nothing about how wide the noise is.",
+        "file": "scripts/make_demo.py",
+        "find": "    verdict_word += noise_note",
+        "replace": "    verdict_word += \"\"",
+        "expect_red": [
+          "tests/test_deliverable.py::test_page_qualifies_the_accuracy_delta_with_the_noise_band"
+        ]
       }
     ]
   },
@@ -2049,7 +2080,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**354 passed / 1 skipped**",
+        "find": "**355 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -2059,7 +2090,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**54 组 / 145 个变异体，全部 SEALED**",
+        "find": "**55 组 / 147 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -2069,7 +2100,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**78 条**（其中 **67 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**78 条**（其中 **68 条**由变异测试证明能变红，**10 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"

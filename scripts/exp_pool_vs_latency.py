@@ -134,7 +134,10 @@ def snapshot(tag: str, out_dir: Path) -> dict[str, str]:
 def inject(patches: dict[str, dict]) -> None:
     with httpx.Client(timeout=10.0) as c:
         for svc, patch in patches.items():
-            r = c.post(f"{SERVICE_URLS[svc]}/_inject", json=patch)
+            # 自报来源（ADR-0009）：留空 ⇒ 世界的历史里出现"匿名改动"，
+            # 而那正是 #65 查不出根因的原因（这个脚本以前就是匿名的）。
+            payload = {**patch, "by": "script:exp_pool_vs_latency"}
+            r = c.post(f"{SERVICE_URLS[svc]}/_inject", json=payload)
             r.raise_for_status()
             print(f"  注入 {svc}: {patch}  → 实际变化 {r.json().get('changed')}")
 

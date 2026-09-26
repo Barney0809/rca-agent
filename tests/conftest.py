@@ -68,10 +68,14 @@ class World:
     # ---- 故障注入 ----
     def inject(self, service: str, patch: dict, *, by: str = "") -> dict:
         """改世界的旋钮。`by` 是**自报来源**（ADR-0009）：世界只能记下它，
-        事后才回答得了"是谁改的"（#65 就卡在这里）。"""
+        事后才回答得了"是谁改的"（#65 就卡在这里）。
+
+        ⚠️ **默认值不许是空的**：留空 ⇒ 历史里出现"匿名改动"，
+        而那正是 #65 查不出根因的原因。所以没显式给 `by` 时，
+        用 pytest 自己设的环境变量 `PYTEST_CURRENT_TEST` 填上**具体是哪个用例**。
+        """
         payload = dict(patch)
-        if by:
-            payload["by"] = by
+        payload["by"] = by or f"tests:{os.environ.get('PYTEST_CURRENT_TEST', 'unknown')}"
         r = self.client.post(f"{SERVICES[service]}/_inject", json=payload)
         r.raise_for_status()
         return r.json()

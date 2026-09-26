@@ -85,6 +85,11 @@ runs/_eval/multi-20260927-021826/*
 !runs/_eval/multi-20260927-023725/
 runs/_eval/multi-20260927-023725/*
 !runs/_eval/multi-20260927-023725/results.json
+# 第 3 轮 F4 压测 —— 至此三轮（45 次尝试）把配对机会推到 16 条：
+# 帮了 8 / 倒忙 1（符号检验 8:1，p≈0.020）。
+!runs/_eval/multi-20260927-031955/
+runs/_eval/multi-20260927-031955/*
+!runs/_eval/multi-20260927-031955/results.json
 !runs/_recordings/
 runs/_recordings/*
 !runs/_recordings/record-deepseek-flash.ndjson

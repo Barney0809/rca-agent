@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections import Counter
 
 import httpx
@@ -343,3 +344,20 @@ async def test_inject_history_records_who_changed_the_knobs(clean_world):
 
     clean_world.inject("order", {"slow_op_ms": 250}, by="tests:inject_history")
     assert len(clean_world.inject_history("order")) == len(after), "值没变 ⇒ 不该进历史（空操作）"
+
+    # ★ **不许有匿名改动**（ADR-0009 决定 2）：留痕的意义就在于"查得出是谁改的"，
+    #   一条 `by` 为空的记录等于没有留痕 —— 而 #65 卡住的原因正是"不知道谁改的"。
+    #
+    #   ⚠️ **只看本次测试时间窗内**的记录：历史活在**容器内存**里，会跨 pytest 会话累积
+    #      （实测里就有 6 条是我修好之前写下的匿名记录，34 分钟前的 —— 不限定时间窗
+    #       就会把它们误读成"现在的缺陷"）。所以要时间戳，而不是"整段历史"。
+    cutoff = time.time() - 1.0
+    anonymous = [
+        h for h in clean_world.inject_history("order")
+        if not str(h.get("by", "")).strip() and float(h.get("ts", 0)) >= cutoff
+    ]
+    assert not anonymous, (
+        f"本次测试产生了 {len(anonymous)} 条**匿名改动**：{anonymous[:2]}\n"
+        f"任何改旋钮的代码路径都必须自报 `by`（夹具默认用 PYTEST_CURRENT_TEST，"
+        f"注入器用 injector:<fault>，ops 门用 ops:<actor>）—— 否则下次出问题还是查不出谁改的"
+    )

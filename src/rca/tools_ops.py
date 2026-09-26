@@ -158,8 +158,11 @@ class OpsToolBox:
                 suggestion="用 order / inventory / payment 之一",
             )
         try:
+            # 自报来源（ADR-0009）：这条是 **Agent / 人的那扇门**，
+            # 留空的话世界的历史里就是"匿名改动" —— 而出问题时最想知道谁改的正是这种。
+            payload = {**dict(knobs), "by": f"ops:{self.actor or 'unknown'}"}
             r = self._http().post(f"{self.world[service]}/_inject",
-                                  json=dict(knobs), timeout=10.0)
+                                  json=payload, timeout=10.0)
             r.raise_for_status()
             after = r.json()
         except Exception as exc:  # noqa: BLE001 —— 连不上世界也是一种"没做成"

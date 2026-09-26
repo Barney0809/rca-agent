@@ -390,6 +390,34 @@ def test_frozen_evidence_is_present_and_not_ignored() -> None:
     assert lines.index("runs/*") < lines.index("!runs/_eval/"), "反选规则的位置不对"
 
 
+def test_page_qualifies_the_accuracy_delta_with_the_noise_band():
+    """#46：页面给出两侧准确率差时，**必须**同时给出噪声带限定。
+
+    历史：页面曾写「准确率反而低了 **4.8 个百分点**」而**一个字都不提波动带** ——
+    而 2026-09-27 实测：同配置重跑，单场景准确率能差 **20 个百分点**；
+    存档里逐轮的波动带也有 **14.3 个百分点**（按当前判据）。
+    4.8pp 落在带内 ⇒ 只能说「没有优势」，**不能说「确实更差」**。
+    这正是 #46 那个错误的现形：把小样本的幅度当结论。
+
+    ⚠️ 这条查的是**现构建的页面**（`make_demo.build()`），不是已提交的那份 ——
+    否则删掉生成器里的限定语，守卫仍会读旧页面而变绿（假绿）。
+    """
+    import re
+
+    page = make_demo.build()
+    assert page, "生成器没产出页面 —— 守卫不能退化成空绿"
+
+    m = re.search(r"<strong>(低了|高了) [\d.]+ 个百分点</strong>", page)
+    assert m, "页面里找不到「准确率差了几个百分点」这句 —— 守卫不能退化成空绿"
+
+    tail = page[m.end(): m.end() + 260]
+    assert "轮间波动" in tail, (
+        "页面报了准确率差却没给**噪声带** ⇒ 读者会把带内的差当成结论（#46）。\n"
+        "带要从**当前判据**下逐轮准确率的 min–max 推出来（`acc_band_now`），别手打数字。"
+    )
+    assert "不能" in tail, "光给带还不够 —— 要明确写出「**不能**说确实更差」这个禁止性结论"
+
+
 UNBUILT_MARKERS = ("未接线", "未实现", "尚未", "计划中", "没有做", "没真用", "未做")
 
 

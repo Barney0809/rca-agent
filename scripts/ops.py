@@ -147,7 +147,14 @@ def main() -> int:
         if not entries:
             print("隔离区是空的。")
             return 0
-        print(f"隔离区里有 {len(entries)} 项：")
+        # ⚠️ 计数必须**分开说**（#49 的同族，2026-09-27 演示彩排时发现）：
+        #    还原过的记录**留在**隔离区里（本项目不删记录，这是有意的），
+        #    所以"隔离区里有 4 项"会让读者以为**4 项都待处理** ——
+        #    而这正是"措辞跟不上事实"：清单里其实 2 项已还原。
+        pending = [en for en in entries if not en.is_restored]
+        restored = len(entries) - len(pending)
+        print(f"隔离区里有 {len(entries)} 条记录：待处理 {len(pending)} 项"
+              + (f"，已还原 {restored} 条（保留记录，不会消失）" if restored else ""))
         for en in entries:
             left = (en.expires_at - datetime.now().astimezone()).total_seconds()
             print(f"  · {en.quarantine_id}")

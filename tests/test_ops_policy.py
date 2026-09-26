@@ -220,7 +220,11 @@ def test_set_knobs_is_allowed_but_audited(engine: PolicyEngine, workspace: Path)
     res = ops.set_knobs("order", {"risk_latency_ms": 800})
 
     assert res.allowed is True, res.reason
-    assert fake.calls == [("http://fake-order/_inject", {"risk_latency_ms": 800})]
+    # ⚠️ 载荷里现在**多一个 `by`**（ADR-0009）：世界的历史要能回答"是谁改的"，
+    #    而这条正是 **ops 门**（Agent / 人）那条路径 —— 它以前是匿名的（#65）。
+    assert fake.calls == [
+        ("http://fake-order/_inject", {"risk_latency_ms": 800, "by": "ops:operator"})
+    ]
     lines = _audit_lines(workspace)
     assert lines and lines[-1].get("allowed") is True, "放行也要记账"
 
