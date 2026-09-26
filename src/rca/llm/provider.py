@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -125,6 +126,35 @@ def estimate_cost_yuan(
 
 # ---------------------------------------------------------------- 配置与结果
 
+def load_env_file(path: Path | None = None) -> int:
+    """把仓库根目录的 `.env` 读进环境变量，返回读进来的键数。
+
+    ⚠️ 为什么要有这个函数（#67，2026-09-27 实测）：
+      `.env.example` 第一句就是「复制本文件为 .env 后填入真实值」，
+      而**全仓库没有任何代码读 `.env`** —— `python-dotenv` 甚至已经写在
+      `pyproject.toml` 的依赖里（声明了却没人 import）。
+      ⇒ 按文档做的人会得到"key 明明填了，却报没有读到 DEEPSEEK_API_KEY"，
+      而且**没有任何线索指向 .env 根本没被读过**。
+      （同族：#66 那 6 个没人读的环境变量 —— 文档承诺、代码不认。）
+
+    ⚠️ **不覆盖已有的环境变量**（`override=False`）：CI 与 shell 里真实设置的值优先。
+    ⚠️ **空值不算**（`KEY=` 不设进环境）：模板里那些空占位不该被当成"已配置" ——
+       否则"没填 key"和"填了空 key"在代码里长得一样，而报错信息会指向错误的方向。
+    """
+    target = path or (Path(__file__).resolve().parents[3] / ".env")
+    if not target.exists():
+        return 0
+    from dotenv import dotenv_values                    # 延迟 import（依赖已是必装项）
+
+    loaded = 0
+    for key, value in dotenv_values(target).items():
+        if not value or key in os.environ:               # 空值 / 环境变量优先
+            continue
+        os.environ[key] = value
+        loaded += 1
+    return loaded
+
+
 @dataclass
 class LlmConfig:
     api_key: str
@@ -138,6 +168,9 @@ class LlmConfig:
 
     @classmethod
     def from_env(cls) -> LlmConfig:
+        # ★ 先读 `.env`（#67）：文档让人把 key 填在这里，代码就必须认。
+        #   真实环境变量优先 —— CI/命令行设的值不会被文件覆盖。
+        load_env_file()
         return cls(
             api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),

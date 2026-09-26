@@ -73,6 +73,12 @@ runs/_eval/multi-20260925-234207/*
 !runs/_eval/multi-20260926-001536/
 runs/_eval/multi-20260926-001536/*
 !runs/_eval/multi-20260926-001536/results.json
+# ★ M2 的 F4 压测版（2026-09-27，15 轮，¥1.5394）：**配对证据**（配对机会 7/15、
+#   帮了 4 / 倒忙 1）与 #44 的 n=15 复现，全都写在 results.json 里
+#   （含护栏逐条账目与每轮结论原文）。与上一组同样处理：**trace 不入库**。
+!runs/_eval/multi-20260927-021826/
+runs/_eval/multi-20260927-021826/*
+!runs/_eval/multi-20260927-021826/results.json
 !runs/_recordings/
 runs/_recordings/*
 !runs/_recordings/record-deepseek-flash.ndjson

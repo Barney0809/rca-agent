@@ -1952,6 +1952,37 @@
       }
     ]
   },
+  "dotenv_is_loaded": {
+    "harness_log": [
+      "#67"
+    ],
+    "why": "#67 (2026-09-27): `.env.example` opens with 'copy this file to .env and fill in the real values', and NO code anywhere read `.env` -- `python-dotenv` was even declared in pyproject.toml (declared but never imported). So anyone following the documentation gets 'DEEPSEEK_API_KEY was not found' while looking at the key they just pasted into .env, with nothing pointing at the fact that .env was never read. Found while trying to run a paid experiment in this very session.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "env-a-dotenv-loaded-but-never-called",
+        "desc": "Keep the loader but stop calling it, exactly the shape that shipped: the function (and the dependency) exist, the documentation promises the workflow, and nobody reads the file.",
+        "file": "src/rca/llm/provider.py",
+        "find": "        load_env_file()",
+        "replace": "        pass  # 变异：不再读 .env",
+        "expect_red": [
+          "tests/test_offline.py::test_llm_config_actually_calls_the_dotenv_loader"
+        ]
+      },
+      {
+        "id": "env-b-dotenv-overrides-the-real-environment",
+        "desc": "Let the file overwrite variables that are already set in the environment. That turns a stray .env into something that silently rewrites CI's credentials -- the opposite of the intended precedence (real environment wins).",
+        "file": "src/rca/llm/provider.py",
+        "find": "        if not value or key in os.environ:               # 空值 / 环境变量优先",
+        "replace": "        if False:",
+        "expect_red": [
+          "tests/test_offline.py::test_dotenv_file_is_actually_read"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1965,7 +1996,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**348 passed / 1 skipped**",
+        "find": "**350 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1975,7 +2006,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**51 组 / 140 个变异体，全部 SEALED**",
+        "find": "**52 组 / 142 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1985,7 +2016,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**76 条**（其中 **65 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**77 条**（其中 **66 条**由变异测试证明能变红，**11 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"

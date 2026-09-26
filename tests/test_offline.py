@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 
@@ -1114,4 +1115,57 @@ def test_env_example_promises_only_what_the_code_reads():
         f"这些变量在 `.env.example` 里承诺了，但**全仓库没有任何代码读它们**，"
         f"也没标注「尚未接线」：{unmarked_dead} ⇒ 设了不会生效，还不报错。\n"
         f"两种改法二选一：① 真的接上；② 在那几行前加一句「⚠️ 尚未接线（设了不会生效）」。"
+    )
+
+
+# ================================================================
+# #67：文档让人"把 key 填进 .env"，代码就必须**真的读 .env**
+# ================================================================
+
+def test_dotenv_file_is_actually_read(tmp_path, monkeypatch):
+    """#67：`.env.example` 第一句就是"复制本文件为 .env 后填入真实值" —— 那就必须真的读它。
+
+    历史（2026-09-27 实测）：**全仓库没有任何代码读 `.env`**，而
+    `python-dotenv` 甚至已经写在 `pyproject.toml` 的依赖里（声明了却没人 import）。
+    ⇒ 照文档做的人会得到"key 明明填了，却报没有读到 DEEPSEEK_API_KEY"，
+    而且**没有任何线索指向 .env 根本没被读过**（同族：#66 那 6 个没人读的变量）。
+    """
+    from rca.llm.provider import load_env_file
+
+    env = tmp_path / ".env"
+    env.write_text("RCA_DOTENV_PROBE=hello\n# 注释行\n\nRCA_DOTENV_EMPTY=\n", encoding="utf-8")
+    monkeypatch.delenv("RCA_DOTENV_PROBE", raising=False)
+
+    assert load_env_file(env) == 1, "应当只读进有值的那个（空值不算）"
+    assert os.environ["RCA_DOTENV_PROBE"] == "hello"
+
+    # ★ **真实环境变量优先**：CI 与命令行设的值绝不能被文件覆盖
+    monkeypatch.setenv("RCA_DOTENV_PROBE", "from_env")
+    assert load_env_file(env) == 0, "已存在的环境变量不该被文件改写"
+    assert os.environ["RCA_DOTENV_PROBE"] == "from_env"
+
+    # 没有 .env 也不许炸（陌生人克隆后第一次跑就是这个状态）
+    assert load_env_file(tmp_path / "nope.env") == 0
+
+
+def test_llm_config_actually_calls_the_dotenv_loader():
+    """结构守卫：`LlmConfig.from_env` 必须**调用** `load_env_file`（#67）。
+
+    只测 `load_env_file` 本身**不够** —— 它完全可以写好了却没人调用，
+    而那正是 #67 的形状：依赖声明了、文档写着、**谁也没读**。
+    """
+    src = (Path(__file__).resolve().parent.parent / "src" / "rca" / "llm" / "provider.py")
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    fn = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "from_env"),
+        None,
+    )
+    assert fn is not None, "provider.py 里找不到 `from_env` —— 守卫不能退化成空绿"
+
+    called = {
+        n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    assert "load_env_file" in called, (
+        "`LlmConfig.from_env` 没有调用 `load_env_file` ⇒ 按文档把 key 填进 `.env` 的人会得到"
+        "「没有读到 DEEPSEEK_API_KEY」，而且没有任何线索指向 `.env` 根本没被读过（#67）"
     )
