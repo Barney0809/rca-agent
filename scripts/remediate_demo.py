@@ -150,6 +150,26 @@ def fault_is_armed(records: list[dict], knobs: dict | None = None) -> tuple[bool
     return True, f"变更记录里 {len(records)} 条改动，在世界里都对得上 ✓（故障确实在）"
 
 
+def metrics_disagree(*, user_facing: dict, causal_aligned: list[dict]) -> bool:
+    """**两把尺子分歧**：用户可感的症状没有变好，而"与故障因果对齐"的量都变好了。
+
+    ⚠️ 为什么单独立一个纯函数（#64 的教训）：
+       这条判定原来**直接写在 `main()` 里**，验证方式是"跑一次 live、看打印"——
+       而那是"我跑过"，不是"它被守住了"：若它恒为 `False`，**全套测试一条都不会红**。
+       抽出来才能离线测、才能配变异体。
+
+    ⚠️ 口径（ADR-0008）：★ 判据是**用户可感**的那个量；因果对齐的量只作**解释**。
+       两者方向相反时**不许只报一把** —— 只报用户侧会漏掉"故障其实被削弱了"，
+       只报因果侧会把灾难说成修复。
+
+    ⚠️ `causal_aligned` 为空时**必须返回 False**：Python 的 `all([])` **恒为 True**，
+       不显式挡住就会在"一把尺子都没有"的情况下报出"分歧" —— 又一个空绿。
+    """
+    return (str(user_facing.get("status")) != "improved"
+            and bool(causal_aligned)
+            and all(str(m.get("status")) == "improved" for m in causal_aligned))
+
+
 def measure(orders: int) -> dict:
     before = read_world()
     sent, ok = drive_traffic(orders)
@@ -178,7 +198,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="M5 症状级验证（端到端）")
     ap.add_argument("--fault", default="F4")
     ap.add_argument("--orders", type=int, default=10)
-    ap.add_argument("--skip-inject", action="store_true", help="世界已经注入过了，不再注入")
+    ap.add_argument("--skip-inject", action="store_true",
+                    help="世界**已经处于故障态**（例如已用 apply 施加过）时不跑注入；"
+                         "核对不上「故障真的在」就拒绝：不下结论、也不动世界")
     ap.add_argument("--approved-by", default="barneyq（人工审批）")
     args = ap.parse_args()
 
@@ -329,15 +351,14 @@ def main() -> int:
     #   ⚠️ 这不是"谁对谁错"：判据（成功订单数）是**用户可感**的，
     #   诊断量（下游放大倍数 / 错误调用）是**与故障因果对齐**的；
     #   重试既放大流量、也把失败订单救回来 —— 撤掉它，两者会朝相反方向动。
-    metrics_disagree = (v_ok["status"] != "improved"
-                        and v_ratio["status"] == "improved"
-                        and v_err["status"] == "improved")
+    #   ⚠️ 判定本身是纯函数（可离线测 + 有变异体），别把它塞回 main() 里（#64）。
+    _disagree = metrics_disagree(user_facing=v_ok, causal_aligned=[v_ratio, v_err])
     report["metrics_disagree"] = {
-        "value": metrics_disagree,
+        "value": _disagree,
         "why": ("用户可感的症状（成功订单数）没有变好，而与故障因果对齐的量"
                 "（下游放大倍数 / 错误调用）变好了 —— 重试既是放大流量的机制，"
                 "也是把失败订单救回来的机制：撤掉它，流量降下来，被救的订单也没了"
-                if metrics_disagree else "两把尺子方向一致（或都没改善）"),
+                if _disagree else "两把尺子方向一致（或都没改善）"),
     }
     report["outcome"] = ("fixed" if symptom_ok else
                          ("action-ok-symptom-partial" if action_ok else "action-failed"))
@@ -373,7 +394,7 @@ def main() -> int:
                   "也不是什么都没做。")
             print("           要**全量**恢复，请走人的那扇门："
                   f".\\.venv\\Scripts\\python.exe scripts\\inject_fault.py revert {args.fault}")
-    if metrics_disagree:
+    if _disagree:
         print("        ⚠️ **两把尺子分歧**（要一起读，不许只挑好看的那把）：")
         print(f"           · 用户可感的症状（{v_ok['symptom']}）：{v_ok['status']}"
               f"（{v_ok.get('before')} → {v_ok.get('after')}）")

@@ -1745,7 +1745,8 @@
       "#60",
       "#61",
       "#62",
-      "#63"
+      "#63",
+      "#64"
     ],
     "why": "#60 (M5): the loop that actually changes the system back. Three ways it becomes dangerous or useless: (a) the human approval quietly becomes optional (then it is an auto-remediation bot); (b) the proposal writes the INJECTED value back instead of the original one (this is the semantic slip I made myself: the change log's `from` is the original value, `to` is the current one); (c) verification reports success while there are no observations at all -- the #26 empty-green trap, this time on the action side.",
     "tests": [
@@ -1821,7 +1822,9 @@
         "replace": "        target = proposal.target_value",
         "expect_red": [
           "tests/test_remediation.py::test_apply_sends_the_value_in_the_type_the_world_uses",
-          "tests/test_remediation.py::test_apply_executes_through_the_mcp_door_and_writes_an_audit"
+          "tests/test_remediation.py::test_apply_executes_through_the_mcp_door_and_writes_an_audit",
+          "tests/test_remediation.py::test_a_value_that_only_matches_as_a_string_is_not_a_success",
+          "tests/test_remediation.py::test_apply_treats_an_unreadable_world_as_unverified"
         ]
       },
       {
@@ -1843,6 +1846,26 @@
         "expect_red": [
           "tests/test_remediation_demo.py::test_fault_is_armed_only_when_the_world_shows_the_recorded_value"
         ]
+      },
+      {
+        "id": "rem-j-disagree-is-vacuously-true",
+        "desc": "#64, the empty-green trap: drop the `bool(causal_aligned)` guard, so `all([])` -- which is True in Python -- lets the demo announce 'the two rulers disagree' while holding NO causal metric at all. A condition that is satisfied by having nothing to check is exactly the class of failure this project keeps re-learning.",
+        "file": "scripts/remediate_demo.py",
+        "find": "            and bool(causal_aligned)",
+        "replace": "            and True",
+        "expect_red": [
+          "tests/test_remediation_demo.py::test_metrics_disagree_is_not_vacuously_true"
+        ]
+      },
+      {
+        "id": "rem-k-disagree-looks-at-the-wrong-side",
+        "desc": "#64: flip which side the disagreement is about (report disagreement when the user-facing metric DID improve), the direction slip this file has already made twice (see #61 for the same mistake in `verify`).",
+        "file": "scripts/remediate_demo.py",
+        "find": "    return (str(user_facing.get(\"status\")) != \"improved\"",
+        "replace": "    return (str(user_facing.get(\"status\")) == \"improved\"",
+        "expect_red": [
+          "tests/test_remediation_demo.py::test_metrics_disagree_needs_a_user_side_that_did_not_improve"
+        ]
       }
     ]
   },
@@ -1859,7 +1882,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**339 passed / 1 skipped**",
+        "find": "**342 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -1869,7 +1892,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**49 组 / 132 个变异体，全部 SEALED**",
+        "find": "**49 组 / 134 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -1879,7 +1902,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**73 条**（其中 **62 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**74 条**（其中 **63 条**由变异测试证明能变红，**11 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"

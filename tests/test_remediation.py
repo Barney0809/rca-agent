@@ -20,6 +20,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -27,6 +29,7 @@ from rca import remediation  # noqa: E402
 from rca.remediation import (  # noqa: E402
     Proposal,
     apply,
+    coerce_like,
     precheck_metric_signal,
     propose,
     verify,
@@ -245,6 +248,23 @@ def test_verify_respects_the_direction_of_the_metric() -> None:
     assert verify(symptom="成功订单数", before=0, after=10,
                   lower_is_better=False)["status"] == "improved"
     assert verify(symptom="WARNING 条数", before=0, after=10)["status"] == "worse"
+
+
+def test_coerce_like_keeps_the_worlds_type() -> None:
+    """类型**以世界当前的值**为准（不猜 schema）。
+
+    ⚠️ `bool` 那两条是**防御性**的：世界现在没有布尔旋钮（`Knobs` 七个字段全是数值），
+    但 Python 里 `bool` 是 `int` 的**子类** ⇒ 判定顺序必须先 bool 后 int，
+    否则 `coerce_like(True, "false")` 会走进 `int("false")` 直接抛异常。
+    这条顺序**必须有用例钉住**，而不能只在实现里写对。
+    """
+    assert coerce_like(64, "8") == 8 and not isinstance(coerce_like(64, "8"), bool)
+    assert coerce_like(0.6, "0.0") == 0.0 and isinstance(coerce_like(0.6, "0.0"), float)
+    assert coerce_like("abc", 1) == "1"
+    assert coerce_like(True, "false") is False
+    assert coerce_like(False, "1") is True
+    with pytest.raises(ValueError):
+        coerce_like(None, "1")            # 读不到当前值 ⇒ 不知道该写什么类型 ⇒ 抛错（调用方会拒绝动手）
 
 
 def test_precheck_refuses_to_conclude_when_the_metric_has_no_signal() -> None:
