@@ -226,7 +226,8 @@ def main() -> int:
         print(f"  证据已写：{EVIDENCE.relative_to(ROOT)}")
         return 4
 
-    v_ok = verify(symptom="成功订单数", before=before["orders_ok"], after=after["orders_ok"])
+    v_ok = verify(symptom="成功订单数", before=before["orders_ok"], after=after["orders_ok"],
+                  lower_is_better=False)      # ★ 成功数**越大越好**（否则 10→0 会被判成改善 ✗）
     # 这两个只当**诊断量**（看着好看/难看都不作判据）
     v_ratio = verify(symptom="（诊断量）每笔订单的下游调用次数",
                      before=_to_int(before["downstream_calls_per_order"] * 100),
@@ -262,17 +263,33 @@ def main() -> int:
                         encoding="utf-8", newline="\n")
 
     print("\n  ── 结论（两件事分开报）──")
+    _inv_retries = after["knobs"].get("inventory", {}).get("downstream_retries")
     print(f"     ① 动作生效了吗：{'✅ 是（读回确认）' if action_ok else '❌ 否'} —— "
-          f"retries={after['knobs'].get('downstream_retries')}（期望 1）")
-    print(f"     ② 症状修好了吗：{'✅ 是' if symptom_ok else '⚠️ 只部分改善'}")
+          f"inventory.retries={_inv_retries}（期望 1）")
+    # ⚠️ 措辞必须**跟着判据走**：判据是 `worse` 时写「只部分改善」是自相矛盾的
+    #    （第一版就是这么写的，而那一版恰好是把 10→0 判成 improved 的那一版 ——
+    #     判据方向错了，措辞就会跟着一起把灾难说成修复）
+    _wording = {
+        "improved": "✅ 是",
+        "unchanged": "⚠️ 没有变化（动作到位了，症状没动）",
+        "worse": "❌ 否 —— 反而**更差**",
+        "unverified": "⚠️ 未验证（缺观测，不猜）",
+    }
+    print(f"     ② 症状修好了吗：{_wording.get(v_ok['status'], v_ok['status'])}"
+          f"（{v_ok.get('before')} → {v_ok.get('after')}）")
     if action_ok and not symptom_ok:
-        unrecorded = sorted({p["knob"] for p in report["proposals"]} ^
-                            {"downstream_retries", "risk_error_rate"})
         print(f"        原因：注入的补丁里有的**没有变更记录** ⇒ M5 不提案（不猜修法）。"
               f"本次提案覆盖：{sorted(p['knob'] for p in report['proposals'])}")
-        print(f"        世界里仍然偏着的旋钮：risk_error_rate="
-              f"{after['knobs'].get('risk_error_rate')}（这个补丁那次场景没有留下记录）")
-        _ = unrecorded
+        # ⚠️ 旋钮要**按服务读**：扁平读法会把 payment 的读成 None（第一次 live 跑就是这么误报的）
+        _rate = after["knobs"].get("payment", {}).get("risk_error_rate")
+        _recorded = any("risk_error_rate" in str(r.get("key", "")) for r in changes["records"])
+        print(f"        世界里仍然偏着的旋钮：payment.risk_error_rate={_rate}"
+              f"（{'变更记录里有它，但这次没有被提案' if _recorded else '这个补丁那次场景没有留下记录'}）")
+        if v_ok["status"] == "worse":
+            print("        ⚠️ **只覆盖故障的一部分时，症状可能反而更差** —— 这既不是修好了，"
+                  "也不是什么都没做。")
+            print("           要**全量**恢复，请走人的那扇门："
+                  f".\\.venv\\Scripts\\python.exe scripts\\inject_fault.py revert {args.fault}")
     print(f"\n  证据已写：{EVIDENCE.relative_to(ROOT)}")
     return 0 if symptom_ok else (3 if action_ok else 1)
 

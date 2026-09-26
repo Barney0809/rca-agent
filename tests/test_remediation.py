@@ -165,3 +165,18 @@ def test_verify_compares_counts_honestly() -> None:
     assert verify(symptom="w", before=100, after=100)["status"] == "unchanged"
     assert verify(symptom="w", before=100, after=140)["status"] == "worse"
     assert verify(symptom="w", before=None, after=3)["status"] == "unverified"
+
+
+def test_verify_respects_the_direction_of_the_metric() -> None:
+    """**踩出来的**：判据写死了"越小越好"，于是"成功订单数 10 → 0"被报成 improved ✗✗
+    —— 脚本用漂亮的措辞报告了一场灾难，还 exit 0 说"通过"。
+
+    ⇒ 方向必须显式写出来：坏事的计数越小越好（默认），好的计数（成功数/成功率）越大越好。
+    """
+    assert verify(symptom="成功订单数", before=10, after=0)["status"] == "improved", \
+        "先确认默认行为：这条在'越小越好'下**确实**会被判成改善（所以必须显式给方向）"
+    assert verify(symptom="成功订单数", before=10, after=0,
+                  lower_is_better=False)["status"] == "worse", "10 掉到 0 是灾难，不是改善"
+    assert verify(symptom="成功订单数", before=0, after=10,
+                  lower_is_better=False)["status"] == "improved"
+    assert verify(symptom="WARNING 条数", before=0, after=10)["status"] == "worse"

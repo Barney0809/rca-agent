@@ -217,8 +217,15 @@ def apply(
             "result": payload, "audit_written": written}
 
 
-def verify(*, symptom: str, before: int | None, after: int | None) -> dict:
-    """验证：症状有没有好转。**缺少观测就说 unverified**，不许说"通过"。"""
+def verify(*, symptom: str, before: int | None, after: int | None,
+           lower_is_better: bool = True) -> dict:
+    """验证：症状有没有好转。**缺少观测就说 unverified**，不许说"通过"。
+
+    ⚠️ `lower_is_better` 这个方向参数是**踩出来的**：默认"越小越好"适用于
+       WARNING 条数、错误调用数这类**坏事的计数**；但"**成功订单数**"是越大越好 ——
+       我把它接进单向判据后，脚本把 `10 → 0`（灾难）判成了 `improved` 并宣布"通过" ✗✗。
+       ⇒ 判据必须显式知道方向，否则它会用漂亮的措辞报告灾难。
+    """
     if before is None or after is None:
         missing = "事前" if before is None else "事后"
         return {
@@ -226,14 +233,14 @@ def verify(*, symptom: str, before: int | None, after: int | None) -> dict:
             "symptom": symptom,
             "why": f"缺少{missing}观测 —— 需要再跑一次场景才能比较（不猜）",
         }
-    if after < before:
-        status = "improved"
-    elif after == before:
+    if after == before:
         status = "unchanged"
+    elif (after < before) if lower_is_better else (after > before):
+        status = "improved"
     else:
         status = "worse"
     return {"status": status, "symptom": symptom, "before": before, "after": after,
-            "delta": after - before}
+            "delta": after - before, "lower_is_better": lower_is_better}
 
 
 def append_audit(record: dict, *, path: Path | None = None) -> int:
