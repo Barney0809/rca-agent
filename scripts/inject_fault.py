@@ -419,11 +419,17 @@ def apply_patches(client: httpx.Client, fault: Fault) -> dict[str, dict]:
 
     ⚠️ /_inject 端点**不会往服务日志写任何东西** —— 这是刻意的，
        否则 Agent 只要 grep 一下就拿到答案了。
+
+    ✅ 但它会记进**带外**历史（`/_inject_history`，ADR-0009）—— 那个端点在 Agent 的
+       工具面之外，所以既不泄题，又能在事后回答"是谁把世界改成这样的"（#65）。
+       所以我们在这里**自报来源**：`by="injector:<fault_id>"`。
     """
     changed_by_service: dict[str, dict] = {}
     for svc, patch in fault.patches.items():
         try:
-            r = client.post(f"{SERVICES[svc]}/_inject", json=patch, timeout=10.0)
+            payload = dict(patch)
+            payload["by"] = f"injector:{fault.id}"
+            r = client.post(f"{SERVICES[svc]}/_inject", json=payload, timeout=10.0)
             changed_by_service[svc] = r.json().get("changed", {})
         except Exception as e:
             changed_by_service[svc] = {"__error__": str(e)}

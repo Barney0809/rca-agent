@@ -70,8 +70,11 @@ Head "2. Dependency importability (the real compatibility test)"
 if (Test-Path $venvPy) {
     $code = @'
 import importlib
-mods = ["langgraph","langchain_core","langchain_openai","mcp","pydantic",
-        "fastapi","uvicorn","httpx","tiktoken","structlog","openai","sse_starlette"]
+# Keep this list == pyproject's direct dependencies (module names, not distribution names).
+# 2026-09-27: dropped langchain_core / langchain_openai / structlog -- declared but
+# imported by nobody (harness-log #68); sse_starlette was never declared (transitive).
+mods = ["langgraph","langgraph.checkpoint.sqlite","mcp","openai","pydantic",
+        "fastapi","uvicorn","httpx","tiktoken","dotenv","redis"]
 bad = 0
 for m in mods:
     try:

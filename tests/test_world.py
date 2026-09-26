@@ -151,6 +151,9 @@ def test_regression_5_stock_is_not_drained(clean_world):
             pytest.fail(
                 f"第 {i + 1} 单失败（HTTP {resp.status_code}）：{resp.text[:200]}\n"
                 f"三个服务当前的旋钮：{clean_world.snapshot()}\n"
+                f"⚠️ **不在默认值上的**（一眼看出被弄脏了什么）：{clean_world.dirty_knobs()}\n"
+                f"注入历史（带外留痕，ADR-0009）："
+                f"{[(h['service'], h['changed'], h['by']) for h in clean_world.inject_history('order')]}\n"
                 f"读法：payment.risk_error_rate > 0 ⇒ 世界是脏的（F4 的签名）；"
                 f"inventory.downstream_retries 是字符串 ⇒ #62 的类型坑；"
                 f"order.pool_limit < 64 ⇒ F2 的残留。"
@@ -309,3 +312,34 @@ async def test_regression_8_f4_retry_storm_multiplies_downstream_traffic(clean_w
         f"（{per_order:.2f} 次/请求）。\n"
         f"若接近 1.0，说明重试根本没被触发 —— 检查 F4 是否同时让 payment 报错。"
     )
+
+
+# ================================================================
+# ADR-0009 / #65：注入要留痕，但**绝不进服务日志**
+# ================================================================
+
+async def test_inject_history_records_who_changed_the_knobs(clean_world):
+    """`/_inject` 不写服务日志（否则 Agent 一 grep 就拿到答案），
+    但必须在**带外历史**里留下"谁改了什么"。
+
+    为什么需要它（#65）：一次集成用例红在"循环里的 5xx"，
+    而**是谁把世界改成那样的查不到** —— 最后只能靠翻 compose 日志反推，且没定论。
+    这条用例钉两件事：
+
+      ① 真实改动**会**留痕，且带**自报的来源**（`by`）；
+      ② **空操作不记**（值没变就不是"有人改过"），否则历史里全是噪声。
+    """
+    before = clean_world.inject_history("order")
+
+    clean_world.inject("order", {"slow_op_ms": 250}, by="tests:inject_history")
+    after = clean_world.inject_history("order")
+
+    assert len(after) == len(before) + 1, f"真实改动必须留痕：{len(before)} → {len(after)}"
+    rec = after[-1]
+    assert rec["service"] == "order" and "slow_op_ms" in rec["changed"], rec
+    assert rec["by"] == "tests:inject_history", (
+        "必须记下**自报的来源** —— 世界只能知道对端是 127.0.0.1，猜不出来源（ADR-0009 决定 2）"
+    )
+
+    clean_world.inject("order", {"slow_op_ms": 250}, by="tests:inject_history")
+    assert len(clean_world.inject_history("order")) == len(after), "值没变 ⇒ 不该进历史（空操作）"

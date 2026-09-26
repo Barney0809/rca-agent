@@ -210,7 +210,7 @@ extra_body={"thinking": {"type": "disabled"}}
 | Python | 3.14.4 | 全部依赖有 cp314 wheel，**零本地编译**（已验证） |
 | langgraph | 1.2.12 | `Send` 必须从 **`langgraph.types`** 导入（`langgraph.constants` 已废弃并会告警）；`create_react_agent` 已废弃 |
 | mcp | 2.2.0 | **v2 重写了客户端 API**：只剩一个 `Client`；`FastMCP`→`MCPServer`；依赖换成 `httpx2` |
-| langchain-openai | 1.6.3 | 走 OpenAI 兼容协议接 DeepSeek，不需要 DeepSeek 专用 SDK |
+| `openai`（SDK 直连） | ≥3.17.0 | 走 OpenAI 兼容协议接 DeepSeek，**不需要 DeepSeek 专用 SDK**。（`langchain-openai` 1.6.3 是等价备选路径，但**代码里没有用它**；2026-09-27 已把它连 `langchain-core` / `structlog` 一起从依赖里移除 —— 声明了却没人 import，见 harness-log #68） |
 | 包管理 | uv 0.12.17 | 用 `python -m uv`（`uv` 命令需重开终端） |
 
 ### 环境现状

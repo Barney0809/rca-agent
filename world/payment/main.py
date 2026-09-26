@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="payment", lifespan=lifespan)
 
 # 故障注入端点。⚠️ 刻意不写任何日志 —— 见 world/common/runtime.py。
-app.include_router(make_inject_router(knobs))
+app.include_router(make_inject_router(knobs, service="payment"))
 
 
 class ChargeRequest(BaseModel):

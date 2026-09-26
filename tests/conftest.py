@@ -66,10 +66,19 @@ class World:
         return self.client.post(f"{ORDER_URL}/orders", json={"sku": sku, "qty": qty})
 
     # ---- 故障注入 ----
-    def inject(self, service: str, patch: dict) -> dict:
-        r = self.client.post(f"{SERVICES[service]}/_inject", json=patch)
+    def inject(self, service: str, patch: dict, *, by: str = "") -> dict:
+        """改世界的旋钮。`by` 是**自报来源**（ADR-0009）：世界只能记下它，
+        事后才回答得了"是谁改的"（#65 就卡在这里）。"""
+        payload = dict(patch)
+        if by:
+            payload["by"] = by
+        r = self.client.post(f"{SERVICES[service]}/_inject", json=payload)
         r.raise_for_status()
         return r.json()
+
+    def inject_history(self, service: str) -> list[dict]:
+        """读**带外**注入历史（ADR-0009）—— Agent 看不到这条路径，排障用。"""
+        return self.client.get(f"{SERVICES[service]}/_inject_history").json()["records"]
 
     def knobs(self, service: str) -> dict:
         return self.client.get(f"{SERVICES[service]}/_knobs").json()
@@ -88,7 +97,17 @@ class World:
         只恢复一部分，等于把"我没动过的那些"交给上一个用例的良心。
         """
         for service, patch in self.DEFAULTS.items():
-            self.inject(service, patch)
+            self.inject(service, patch, by="tests:clean_world.reset")
+
+    def dirty_knobs(self) -> dict:
+        """哪些旋钮**不在默认值**上（失败时一眼看出世界被谁弄脏了）。"""
+        out: dict[str, dict] = {}
+        for service, defaults in self.DEFAULTS.items():
+            now = self.knobs(service)
+            off = {k: v for k, v in now.items() if k in defaults and v != defaults[k]}
+            if off:
+                out[service] = off
+        return out
 
     def close(self) -> None:
         self.client.close()

@@ -94,12 +94,55 @@ class Knobs:
         }
 
 
-def make_inject_router(knobs: Knobs, on_change=None) -> APIRouter:
+#: `/_inject` 的**带外**留痕：只保留最近 N 条（有界，防止长跑吃内存）。
+#:
+#: ⚠️ 为什么要有它（ADR-0009 / harness-log #65）：一次集成用例红在
+#:    "循环里的 5xx"，而**谁把世界改成这样的查不到** —— `/_inject` 刻意不留任何痕迹。
+#:    于是最该有日志的那件事，恰好是唯一没日志的。这一层是**排障用的**，
+#:    不是审计账本（真要账本看 `runs/_remediation.ndjson` 与 `src/rca/policy/audit.py`）。
+#:
+#: ⚠️ **绝不写进服务日志**：Agent 的三路只读工具之一就是日志 ——
+#:    写进去等于把"谁改了 retries"直接告诉 Agent，F4 场景（配置漂移靠变更记录发现）当场失效。
+#:    所以它只走**这个 Agent 看不见的只读端点**（见 ADR-0009 决定 1）。
+INJECT_HISTORY_LIMIT = 64
+_INJECT_HISTORY: list[dict] = []
+
+
+def record_injection(service: str, changed: dict, by: str = "") -> None:
+    """把一次真实改动记进带外历史（有界环形缓冲）。
+
+    ⚠️ 这里**不许抛异常**：它是在 `/_inject` 的处理路径里被调用的 ——
+       留痕失败把"注入"这条路径搞崩（500），调用方会以为"注入失败"，
+       而真相是"日志记不下来"。所以对值只做**保守转换**（认不出就原样存）。
+    """
+    if not changed:
+        return
+    import time  # noqa: PLC0415
+
+    def _plain(v: object) -> object:
+        return list(v) if isinstance(v, (list, tuple)) else v      # apply() 给的是 [旧, 新]
+
+    _INJECT_HISTORY.append({
+        "ts": round(time.time(), 3),
+        "service": service,
+        "changed": {k: _plain(v) for k, v in changed.items()},
+        "by": by,                      # 调用方**自报**（本机都是 127.0.0.1，世界猜不出来源）
+    })
+    del _INJECT_HISTORY[:-INJECT_HISTORY_LIMIT]
+
+
+def inject_history() -> list[dict]:
+    """最近若干次注入（新的在后）。只读。"""
+    return list(_INJECT_HISTORY)
+
+
+def make_inject_router(knobs: Knobs, on_change=None, service: str = "") -> APIRouter:
     """构造 `/_inject` 端点。
 
     参数：
       knobs      —— 要改的参数集合
       on_change  —— 可选回调（changed: dict）→ None。用于"改了池大小要通知池"这类联动。
+      service    —— 服务名，只用于**带外留痕**（ADR-0009），不进日志。
 
     ⚠️ 这里【刻意不写任何日志】。理由见本文件头部。
     """
@@ -107,9 +150,13 @@ def make_inject_router(knobs: Knobs, on_change=None) -> APIRouter:
 
     @router.post("/_inject", include_in_schema=False)
     async def inject(patch: dict):
+        # `by` 是**调用方自报**的来源（不进 Knobs，只是一个记号）：注入器传 fault_id、
+        # 集成夹具传用例名 —— 否则事后无从知道"是谁改的"（#65 就卡在这里）。
+        by = str(patch.pop("by", "")) if isinstance(patch, dict) else ""
         changed = knobs.apply(patch)
         if changed and on_change is not None:
             on_change(changed)
+        record_injection(service, changed, by)
         # 注意：没有 log.xxx —— 这是刻意的
         return {"changed": changed, "current": knobs.snapshot()}
 
@@ -117,5 +164,10 @@ def make_inject_router(knobs: Knobs, on_change=None) -> APIRouter:
     async def read_knobs():
         """只读当前参数。仅供本机排查用，Agent 不读它。"""
         return knobs.snapshot()
+
+    @router.get("/_inject_history", include_in_schema=False)
+    async def read_inject_history():
+        """只读**带外**注入历史（ADR-0009）。Agent 的工具面里没有它 —— 这是有意的。"""
+        return {"limit": INJECT_HISTORY_LIMIT, "records": inject_history()}
 
     return router

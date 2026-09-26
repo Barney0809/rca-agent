@@ -1169,3 +1169,132 @@ def test_llm_config_actually_calls_the_dotenv_loader():
         "`LlmConfig.from_env` 没有调用 `load_env_file` ⇒ 按文档把 key 填进 `.env` 的人会得到"
         "「没有读到 DEEPSEEK_API_KEY」，而且没有任何线索指向 `.env` 根本没被读过（#67）"
     )
+
+
+# ================================================================
+# #68：声明的直接依赖，必须**真的被 import 过**
+# ================================================================
+
+#: 声明了、但**不该**在 Python 里 import 的依赖 —— 逐条写明理由，**不许静默放行**。
+#: （每条都会被守卫检查"是否还在声明里"，所以这张表不会腐烂成历史残留。）
+ALLOWED_WITHOUT_IMPORT = {
+    "uvicorn": "被诊断系统由 `python -m uvicorn world.*.main:app` 启动（见 docker-compose.yml），"
+               "Python 侧不需要 import 它",
+}
+
+
+def test_every_declared_dependency_is_actually_imported():
+    """#68：`pyproject` 里每个直接依赖，都必须**真的出现在某处 import 语句里**。
+
+    历史（2026-09-27）：`langchain-core` / `langchain-openai` / `structlog` 三个
+    **全仓库没有任何 `.py` import 它们**，却在依赖表里 —— 于是"这个项目用 langchain"
+    成了读者的默认印象，而真正的实现是 `from openai import OpenAI`（`src/rca/llm/provider.py`）。
+    这与 #66/#67 是同一族：**声明/文档承诺了，代码不认**（设了不生效、装了不用、没人报错）。
+
+    ⚠️ **朴素写法会误报**（我第一次就是这么写错的）：按"发行名 = 模块名"去找
+    `import langgraph_checkpoint_sqlite` 永远找不到 —— 因为那个包的模块名是
+    **`langgraph`**（命名空间包），而 `python-dotenv` 的模块名是 **`dotenv`**。
+    正确做法是用 `importlib.metadata.packages_distributions()` 拿**发行名 → 模块名**的映射。
+    """
+    import importlib.metadata as md
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = [re.split(r"[<>=!\[; ]", d)[0].strip() for d in data["project"]["dependencies"]]
+    assert len(deps) >= 8, f"只读到 {len(deps)} 个依赖 —— 守卫不能退化成空绿"
+
+    # 仓库里所有被 import 的模块名（AST，能抓到函数内的延迟 import）
+    imported: set[str] = set()
+    for sub in ("src", "eval", "scripts", "world", "tests"):
+        for p in (root / sub).rglob("*.py"):
+            for node in ast.walk(ast.parse(p.read_text(encoding="utf-8", errors="replace"))):
+                if isinstance(node, ast.Import):
+                    imported.update(a.name for a in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported.add(node.module)
+    assert imported, "一个 import 都没扫到 —— 守卫不能退化成空绿"
+
+    # 发行名 → 模块名（一个发行名可能对应多个模块；也可能对应命名空间包）
+    dist_to_mods: dict[str, list[str]] = {}
+    for module, dists in md.packages_distributions().items():
+        for d in dists:
+            dist_to_mods.setdefault(d, []).append(module)
+
+    unused: list[str] = []
+    for dep in deps:
+        if dep in ALLOWED_WITHOUT_IMPORT:
+            continue
+        mods = dist_to_mods.get(dep) or dist_to_mods.get(dep.replace("_", "-")) or []
+        if not mods:
+            unused.append(f"{dep}（连模块名都查不到：它装了吗？）")
+            continue
+        if not any(
+            m in imported or any(i.split(".")[0] == m for i in imported) for m in mods
+        ):
+            unused.append(f"{dep}（模块 {mods} 没有任何 import）")
+
+    assert not unused, (
+        f"这些依赖声明了却**没人 import**：{unused}\n"
+        f"两种改法二选一：① 真的用它；② 从 `pyproject.toml` 删掉它"
+        f"（顺带把 `scripts/dev.ps1` 的自检表对齐）。\n"
+        f"别留着 —— 读者会以为这个项目用了它（harness-log #68）。"
+    )
+
+    # 例外表不许腐烂：写在里面的依赖必须**确实还在声明**里（否则它只是历史残留）
+    stale = [d for d in ALLOWED_WITHOUT_IMPORT if d not in deps]
+    assert not stale, f"例外表里的这些已经不是依赖了，删掉它们：{stale}"
+
+
+def test_inject_history_is_bounded():
+    """ADR-0009：`/_inject` 的**带外**留痕必须是**有界**的（长跑不许把内存吃光）。
+
+    它是排障用的，不是审计账本 —— 所以"老记录会被挤掉"是**有意**的设计，
+    但"无上限地长"就是缺陷。这条用例直接量边界（不需要 Docker）。
+    """
+    from world.common import runtime as rt
+
+    original = list(rt._INJECT_HISTORY)
+    try:
+        rt._INJECT_HISTORY.clear()
+        for i in range(rt.INJECT_HISTORY_LIMIT + 10):
+            # 形状与 `Knobs.apply()` 给的一致：{字段: [旧值, 新值]}
+            rt.record_injection("order", {"slow_op_ms": [0, i]}, by="tests:bound")
+        assert len(rt.inject_history()) == rt.INJECT_HISTORY_LIMIT, (
+            f"上限 {rt.INJECT_HISTORY_LIMIT} 没生效：现在 {len(rt.inject_history())} 条"
+        )
+        # 没改动 ⇒ 不记（否则历史里全是空操作噪声）
+        rt.record_injection("order", {}, by="tests:bound")
+        assert len(rt.inject_history()) == rt.INJECT_HISTORY_LIMIT, "空补丁不该进历史"
+    finally:                                    # 复原，别影响同一进程里的其它用例
+        rt._INJECT_HISTORY.clear()
+        rt._INJECT_HISTORY.extend(original)
+
+
+def test_inject_history_never_touches_the_service_log():
+    """ADR-0009 决定 1 的**硬约束**：留痕**不许**写进服务日志。
+
+    理由不是洁癖：**Agent 的三路只读工具之一就是日志** ——
+    写进去等于把"谁把 retries 改成了 5"直接告诉它，
+    F4（配置漂移要靠变更记录去发现）整个场景当场失效。
+
+    这条用 AST 盯着 `record_injection` 的函数体：不许出现 logger / print。
+    """
+    src = (Path(__file__).resolve().parent.parent / "world" / "common" / "runtime.py")
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    fn = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == "record_injection"),
+        None,
+    )
+    assert fn is not None, "找不到 `record_injection` —— 守卫不能退化成空绿"
+
+    names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    attrs = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+    banned_names = {"print", "get_logger", "getLogger"} & names
+    banned_attrs = {"info", "warning", "error", "debug", "exception"} & attrs
+    assert not banned_names and not banned_attrs, (
+        f"`record_injection` 在写日志/打印：{sorted(banned_names | banned_attrs)} ⇒ "
+        f"Agent 一 grep 日志就拿到答案，F4 场景失效（ADR-0009 决定 1）。"
+        f"留痕只能走带外端点 `/_inject_history`。"
+    )

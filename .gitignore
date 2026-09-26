@@ -79,6 +79,12 @@ runs/_eval/multi-20260926-001536/*
 !runs/_eval/multi-20260927-021826/
 runs/_eval/multi-20260927-021826/*
 !runs/_eval/multi-20260927-021826/results.json
+# 第 2 轮 F4 压测（同配置）—— 用来把配对机会从 7 推到 11 条；
+# ⚠️ 两轮同配置的臂级准确率差了 20 个百分点（73.3% vs 93.3%），
+#    正是"臂口径在这个样本量下没用、只有配对口径可用"的证据。
+!runs/_eval/multi-20260927-023725/
+runs/_eval/multi-20260927-023725/*
+!runs/_eval/multi-20260927-023725/results.json
 !runs/_recordings/
 runs/_recordings/*
 !runs/_recordings/record-deepseek-flash.ndjson

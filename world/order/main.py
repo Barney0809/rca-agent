@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="order", lifespan=lifespan)
 
 # 故障注入端点。⚠️ 它刻意不写任何日志 —— 见 world/common/runtime.py 的说明。
-app.include_router(make_inject_router(knobs))
+app.include_router(make_inject_router(knobs, service="order"))
 
 
 class OrderRequest(BaseModel):

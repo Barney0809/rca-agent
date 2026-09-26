@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="inventory", lifespan=lifespan)
 
 # 故障注入端点。⚠️ 刻意不写任何日志 —— 见 world/common/runtime.py。
-app.include_router(make_inject_router(knobs))
+app.include_router(make_inject_router(knobs, service="inventory"))
 
 
 class ReserveRequest(BaseModel):

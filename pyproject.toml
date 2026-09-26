@@ -10,11 +10,17 @@ license = { text = "MIT" }
 #   1. 全部选「纯 Python」或「有 cp314 win_amd64 wheel」的包 —— 保证零本地编译
 #   2. 不用 extras（如 uvicorn[standard]），它会拉入需要编译的原生依赖
 #   3. 版本用下界约束，精确锁定交给 uv.lock
+#   4. ⚠️ **只声明真的被 import 的东西**（2026-09-27 清理）：
+#      原来还声明了 `langchain-core` / `langchain-openai` / `structlog`，
+#      而**全仓库没有任何 .py 文件 import 它们**（本项目的 LLM 客户端是
+#      `from openai import OpenAI` 直连 OpenAI 兼容端点，见 src/rca/llm/provider.py）。
+#      "声明了没人用"与"文档承诺了代码不认"是同一类失真（harness-log #66/#67/#68）。
+#      ⇒ 现在有一条**守卫**盯着这件事：每个直接依赖的模块名必须真的出现在某处 import 里
+#        （用 `importlib.metadata.packages_distributions()` 做发行名→模块名映射，
+#         所以 `langgraph-checkpoint-sqlite` 这种"模块名与发行名不同"的不会误报）。
 dependencies = [
     # --- Agent 编排 ---
     "langgraph>=1.2.12",
-    "langchain-core>=1.6.4",
-    "langchain-openai>=1.6.3",
     # --- 协议与模型 ---
     "mcp>=2.2.0",
     "openai>=3.17.0",
@@ -26,7 +32,6 @@ dependencies = [
     # --- 工程基础 ---
     "httpx>=0.28.1",
     "tiktoken>=0.14.0",
-    "structlog>=26.1.0",
     "python-dotenv>=1.0.1",
     # --- 被诊断系统的公共代码（world/common）在本机也要能 import ---
     # 理由：world/common/config.py 需要 redis 客户端；而流量生成器、

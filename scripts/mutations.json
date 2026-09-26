@@ -1983,6 +1983,59 @@
       }
     ]
   },
+  "declared_deps_are_imported": {
+    "harness_log": [
+      "#68"
+    ],
+    "why": "#68 (2026-09-27): pyproject listed langchain-core / langchain-openai / structlog and NO .py file anywhere imports them -- yet a reader (and an interviewer) concludes 'this project uses langchain', while the real client is `from openai import OpenAI`. Same family as #66/#67: declared and documented, but the code does not agree, and nothing reports it. The guard maps distribution names to module names via importlib.metadata.packages_distributions(), because the naive 'distribution name == module name' check misfires on python-dotenv (module dotenv) and langgraph-checkpoint-sqlite (module langgraph, a namespace package).",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "deps-a-declare-something-nobody-imports",
+        "desc": "Put langchain-openai back into the dependency list, the exact state that shipped: declared, installed, documented in the version tables -- and imported by nobody. Both failure paths go red (module present with no import, or distribution unknown), so the mutant is install-independent.",
+        "file": "pyproject.toml",
+        "find": "    \"tiktoken>=0.14.0\",",
+        "replace": "    \"tiktoken>=0.14.0\",\n    \"langchain-openai>=1.6.3\",",
+        "expect_red": [
+          "tests/test_offline.py::test_every_declared_dependency_is_actually_imported"
+        ]
+      }
+    ]
+  },
+  "inject_history_is_out_of_band": {
+    "harness_log": [
+      "#65"
+    ],
+    "why": "#65 (ADR-0009): the one thing that most needed a log was the only thing with none -- `/_inject` left no trace, so when an integration test went red on a loop of 5xx, nobody could say who had dirtied the world. The fix must NOT go into the service log (the Agent reads logs; that would hand it the answer and kill the F4 scenario), so it lives in a bounded in-memory buffer behind a read-only endpoint the Agent's toolbox cannot reach. Two mutants: an unbounded buffer, and a trace that logs (the information leak).",
+    "tests": [
+      "tests/test_offline.py",
+      "tests/test_world.py"
+    ],
+    "mutations": [
+      {
+        "id": "hist-a-history-grows-without-bound",
+        "desc": "Stop trimming the ring buffer, so a long-running world accumulates every injection forever. It is a debugging aid, not an audit ledger -- unbounded is a leak with no upside.",
+        "file": "world/common/runtime.py",
+        "find": "    del _INJECT_HISTORY[:-INJECT_HISTORY_LIMIT]",
+        "replace": "    pass  # 变异：不再裁剪（无界增长）",
+        "expect_red": [
+          "tests/test_offline.py::test_inject_history_is_bounded"
+        ]
+      },
+      {
+        "id": "hist-b-trace-leaks-into-the-service-log",
+        "desc": "Log each injection through the world's logger. That is the information leak ADR-0009 forbids: the Agent's read-only tool set includes the logs, so it would read 'inventory.downstream_retries 1 -> 5' straight out of them and the F4 scenario (config drift found via the change log) collapses.",
+        "file": "world/common/runtime.py",
+        "find": "    if not changed:\n        return",
+        "replace": "    if not changed:\n        return\n    import logging\n    logging.getLogger(\"world\").warning(\"inject %s %s\", service, changed)",
+        "expect_red": [
+          "tests/test_offline.py::test_inject_history_never_touches_the_service_log"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -1996,7 +2049,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**350 passed / 1 skipped**",
+        "find": "**354 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -2006,7 +2059,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**52 组 / 142 个变异体，全部 SEALED**",
+        "find": "**54 组 / 145 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -2016,7 +2069,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**77 条**（其中 **66 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**78 条**（其中 **67 条**由变异测试证明能变红，**11 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
