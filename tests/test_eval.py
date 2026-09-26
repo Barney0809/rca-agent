@@ -1268,6 +1268,31 @@ def test_default_step_budget_matches_the_documented_protocol():
     )
 
 
+def test_a_run_with_zero_attempts_is_not_a_success(capsys):
+    """#69：**一次都没测到**不许报成功。
+
+    实测（2026-09-27，做 D19 的负对照时撞上）：`--mode replay --batch <不存在的批次>`
+    会逐条打印"失败（跳过）"、什么都不写、然后 **exit 0** ⇒
+    CI / 脚本看到的是"成功"，而实际上一次都没测到。
+
+    两条方向都要守：
+      · 0 次尝试 ⇒ 非零（否则就是"没测到伪装成测到了"）；
+      · 有尝试（哪怕中途放弃、哪怕全错）⇒ 0（那些尝试是花了钱的，照常存档）。
+    """
+    from eval.runner import Report, exit_code_for
+
+    empty = Report(model="m", mode="replay", rounds=1, started_at="t")
+    assert exit_code_for(empty) == 2, "一次尝试都没有 ⇒ 必须是非零退出码"
+    assert "一次尝试都没有产出" in capsys.readouterr().out, "还要说清为什么（而不是静默非零）"
+
+    has_attempts = Report(model="m", mode="live", rounds=1, started_at="t",
+                          attempts=[_attempt_with("F1", correct=False)])
+    assert exit_code_for(has_attempts) == 0, "有尝试就不该说'没跑'（哪怕答案是错的）"
+
+    has_attempts.aborted_reason = "402 Insufficient Balance"
+    assert exit_code_for(has_attempts) == 0, "中途放弃但已有尝试 ⇒ 仍然照常存档（#56 的教训）"
+
+
 def test_report_prints_the_pricing_tier(capsys):
     from eval.runner import Report, print_report
 

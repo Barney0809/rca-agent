@@ -94,6 +94,17 @@ runs/_eval/multi-20260927-031955/*
 runs/_recordings/*
 !runs/_recordings/record-deepseek-flash.ndjson
 
+# D19 收尾（2026-09-27）：**一批录制 = 一次运行** 的两份直接证据
+#   ① 录制那一次（baseline 7 场景 × 3 轮 = 21 次尝试）② 用**同一批**回放的那一次（F1+F8）
+#   只入库 results.json（trace 各 ~1MB，且断言只用得到判定与批次）；便携包在仓库根
+#   `replay_pack_b-d19-20260927/`（1.96 MB，陌生人可直接 `RCA_REPLAY_ROOT` 指过去回放）。
+!runs/_eval/baseline-20260927-040743/
+runs/_eval/baseline-20260927-040743/*
+!runs/_eval/baseline-20260927-040743/results.json
+!runs/_eval/baseline-20260927-040827/
+runs/_eval/baseline-20260927-040827/*
+!runs/_eval/baseline-20260927-040827/results.json
+
 # ------------------------------------------------------------
 #  会话交接笔记（HANDOFF.md）—— 草稿，不是仓库文档
 # ------------------------------------------------------------

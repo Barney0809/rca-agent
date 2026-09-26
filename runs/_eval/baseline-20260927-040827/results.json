@@ -1,0 +1,187 @@
+{
+  "agent": "baseline",
+  "pricing_tier": "off_peak",
+  "model": "deepseek-flash",
+  "mode": "replay",
+  "rounds": 3,
+  "started_at": "2026-09-27T04:08:21+08:00",
+  "max_steps": 22,
+  "cross_exam_steps": 14,
+  "guard": false,
+  "aggregate": {
+    "n_attempts": 6,
+    "n_rounds": 3,
+    "accuracy": 1.0,
+    "accuracy_per_round": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "accuracy_band": [
+      1.0,
+      1.0
+    ],
+    "mean_cost_yuan": 0.02011528,
+    "cost_per_round": [
+      0.02011528,
+      0.02011528,
+      0.02011528
+    ],
+    "cost_band_yuan": [
+      0.02011528,
+      0.02011528
+    ],
+    "total_cost_yuan": 0.12069168,
+    "mean_steps": 8,
+    "steps_per_round": [
+      8,
+      8,
+      8
+    ],
+    "steps_band": [
+      8.0,
+      8.0
+    ],
+    "fully_converged_rate": 1.0,
+    "json_parse_rate": 1.0,
+    "per_fault": {
+      "F1": {
+        "label": "外部依赖变慢",
+        "accuracy": 1.0,
+        "mean_steps": 10,
+        "mean_tool_calls": 56,
+        "mean_cost_yuan": 0.02839456,
+        "mean_elapsed_s": 0.0025712666489804783,
+        "finished_rate": 1.0
+      },
+      "F8": {
+        "label": "多故障叠加（风控变慢 + 内存泄漏）",
+        "accuracy": 1.0,
+        "mean_steps": 6,
+        "mean_tool_calls": 22,
+        "mean_cost_yuan": 0.011836,
+        "mean_elapsed_s": 0.0016211000038310885,
+        "finished_rate": 1.0
+      }
+    },
+    "invalidated": {},
+    "n_excluded_attempts": 0,
+    "n_attempts_total": 6
+  },
+  "attempts": [
+    {
+      "fault_id": "F1",
+      "round_no": 1,
+      "correct": true,
+      "explanation": "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）",
+      "root_cause": "外部风控（payment 的下游依赖）响应缓慢，单次耗时约 800ms，是整条调用链延迟的主要来源",
+      "steps": 10,
+      "tool_calls": 56,
+      "cost_yuan": 0.02839456,
+      "input_tokens": 56852,
+      "output_tokens": 5461,
+      "elapsed_s": 0.002563199959695339,
+      "finished": true,
+      "parse_ok": true,
+      "repeat_calls": 0,
+      "trace_path": "runs/_eval/baseline-20260927-040827/traces/F1-r1.json",
+      "detail": {},
+      "guard": {}
+    },
+    {
+      "fault_id": "F1",
+      "round_no": 2,
+      "correct": true,
+      "explanation": "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）",
+      "root_cause": "外部风控（payment 的下游依赖）响应缓慢，单次耗时约 800ms，是整条调用链延迟的主要来源",
+      "steps": 10,
+      "tool_calls": 56,
+      "cost_yuan": 0.02839456,
+      "input_tokens": 56852,
+      "output_tokens": 5461,
+      "elapsed_s": 0.00248180003836751,
+      "finished": true,
+      "parse_ok": true,
+      "repeat_calls": 0,
+      "trace_path": "runs/_eval/baseline-20260927-040827/traces/F1-r2.json",
+      "detail": {},
+      "guard": {}
+    },
+    {
+      "fault_id": "F1",
+      "round_no": 3,
+      "correct": true,
+      "explanation": "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）",
+      "root_cause": "外部风控（payment 的下游依赖）响应缓慢，单次耗时约 800ms，是整条调用链延迟的主要来源",
+      "steps": 10,
+      "tool_calls": 56,
+      "cost_yuan": 0.02839456,
+      "input_tokens": 56852,
+      "output_tokens": 5461,
+      "elapsed_s": 0.0026687999488785863,
+      "finished": true,
+      "parse_ok": true,
+      "repeat_calls": 0,
+      "trace_path": "runs/_eval/baseline-20260927-040827/traces/F1-r3.json",
+      "detail": {},
+      "guard": {}
+    },
+    {
+      "fault_id": "F8",
+      "round_no": 1,
+      "correct": true,
+      "explanation": "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）",
+      "root_cause": "外部风控（payment 的下游）响应变慢：单次风控耗时约 800ms，占 payment 总耗时（~818ms）的绝大部分，并逐层向上传导为 inventory ~899ms、order ~1032ms 的整体变慢；属于最下游的延迟劣化，而非上游问题。；order 服务存在内存泄漏：本时段 leak_bytes_total 增量约 4.22e+09 字节（~4.2GB），与风控延迟无关，是独立问题。",
+      "steps": 6,
+      "tool_calls": 22,
+      "cost_yuan": 0.011836,
+      "input_tokens": 21928,
+      "output_tokens": 2181,
+      "elapsed_s": 0.0013108000857755542,
+      "finished": true,
+      "parse_ok": true,
+      "repeat_calls": 0,
+      "trace_path": "runs/_eval/baseline-20260927-040827/traces/F8-r1.json",
+      "detail": {},
+      "guard": {}
+    },
+    {
+      "fault_id": "F8",
+      "round_no": 2,
+      "correct": true,
+      "explanation": "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）",
+      "root_cause": "外部风控（payment 的下游）响应变慢：单次风控耗时约 800ms，占 payment 总耗时（~818ms）的绝大部分，并逐层向上传导为 inventory ~899ms、order ~1032ms 的整体变慢；属于最下游的延迟劣化，而非上游问题。；order 服务存在内存泄漏：本时段 leak_bytes_total 增量约 4.22e+09 字节（~4.2GB），与风控延迟无关，是独立问题。",
+      "steps": 6,
+      "tool_calls": 22,
+      "cost_yuan": 0.011836,
+      "input_tokens": 21928,
+      "output_tokens": 2181,
+      "elapsed_s": 0.0017263999907299876,
+      "finished": true,
+      "parse_ok": true,
+      "repeat_calls": 0,
+      "trace_path": "runs/_eval/baseline-20260927-040827/traces/F8-r2.json",
+      "detail": {},
+      "guard": {}
+    },
+    {
+      "fault_id": "F8",
+      "round_no": 3,
+      "correct": true,
+      "explanation": "✅ 命中全部关键词组（且出现在主张位置，不是被否掉的位置）",
+      "root_cause": "外部风控（payment 的下游）响应变慢：单次风控耗时约 800ms，占 payment 总耗时（~818ms）的绝大部分，并逐层向上传导为 inventory ~899ms、order ~1032ms 的整体变慢；属于最下游的延迟劣化，而非上游问题。；order 服务存在内存泄漏：本时段 leak_bytes_total 增量约 4.22e+09 字节（~4.2GB），与风控延迟无关，是独立问题。",
+      "steps": 6,
+      "tool_calls": 22,
+      "cost_yuan": 0.011836,
+      "input_tokens": 21928,
+      "output_tokens": 2181,
+      "elapsed_s": 0.0018260999349877238,
+      "finished": true,
+      "parse_ok": true,
+      "repeat_calls": 0,
+      "trace_path": "runs/_eval/baseline-20260927-040827/traces/F8-r3.json",
+      "detail": {},
+      "guard": {}
+    }
+  ]
+}

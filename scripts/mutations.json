@@ -2067,6 +2067,27 @@
       }
     ]
   },
+  "zero_attempts_is_not_success": {
+    "harness_log": [
+      "#69"
+    ],
+    "why": "#69 (2026-09-27): found while building D19's negative control -- replaying a batch that does not exist printed 'failed (skipped)' for the attempt, wrote no results file at all, and exited 0. An automated caller (CI, a script) therefore reads 'success' while nothing was measured. Same family as #26's empty green and #56's 'not reviewed is not the same as fine': 'not measured' dressed up as 'measured'.",
+    "tests": [
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "run-a-zero-attempts-looks-like-success",
+        "desc": "Make the exit code say 0 even when the run produced no attempts whatsoever -- the shipped behaviour. Both directions are guarded: zero attempts must be non-zero, while a run that aborted mid-way but already has attempts must stay 0 (those attempts cost money and are archived).",
+        "file": "eval/runner.py",
+        "find": "    if report.attempts:\n        return 0",
+        "replace": "    if True:\n        return 0",
+        "expect_red": [
+          "tests/test_eval.py::test_a_run_with_zero_attempts_is_not_a_success"
+        ]
+      }
+    ]
+  },
   "status_numbers_do_not_drift": {
     "harness_log": [
       "#54"
@@ -2080,7 +2101,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**355 passed / 1 skipped**",
+        "find": "**356 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -2090,7 +2111,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**55 组 / 147 个变异体，全部 SEALED**",
+        "find": "**56 组 / 148 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -2100,7 +2121,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**78 条**（其中 **68 条**由变异测试证明能变红，**10 条**",
+        "find": "封堵清单：**79 条**（其中 **69 条**由变异测试证明能变红，**10 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
