@@ -16,6 +16,11 @@
    **绝不**提案删除/隔离区动作。不可逆的能力不该长在这条链路上。
 3. **验证不许在缺少观测时说"通过"**：没有事后观测就如实报 `unverified`
    —— "没测出来"和"测出来是好的"必须分开（#26 的空绿）。
+4. **写回去的值必须与世界的类型一致**（#62）：世界的 `/_inject` **不做任何类型转换**，
+   所以把 `"1"`（字符串）写进一个整数旋钮，服务会在**运行时**崩
+   （`max(1, "1")` → TypeError → 500），而"读回确认"如果按**字符串**比较，
+   还会报告 `applied=True` —— 类型被改坏了，检查却说"成功"。
+   ⇒ 写入前先读当前值学它的类型，读回时**连类型一起比**。
 
 ⚠️ 本模块**不自己发任何 HTTP、也不直接碰运维工具箱**：
    执行一律通过**那扇被批准的 MCP 门**（`rca.mcp_client.call_ops_tool` →
@@ -161,6 +166,36 @@ def propose(changes: list[dict]) -> list[Proposal]:
     return out
 
 
+def coerce_like(current: object, value: object) -> object:
+    """把 `value` 转成与 `current` **同一个类型**的值。
+
+    ⚠️ 为什么必须做（#62，实测把世界弄崩过）：
+       变更记录里的值是**字符串**（注入器写的是 `str(from_val)`），而世界里的旋钮是
+       `int` / `float`。世界的 `/_inject` 只做 `setattr`，**不做任何类型转换** ⇒
+       把 `"1"` 写进 `downstream_retries` 之后，`max(1, "1")` 抛 TypeError，
+       **之后每一个请求都 500**（症状是 order 侧 502）。
+       更糟的是：读回检查当时按 `str(observed) == str(target)` 比较，
+       所以它**报告了 `applied=True`** —— 类型被改坏了，检查却说成功。
+
+    类型以**世界当前的值**为准（不是我们猜一个 schema）：读不到当前值就**拒绝执行**，
+    宁愿不动，也不猜。
+    """
+    if isinstance(current, bool):                    # bool 是 int 的子类，必须先判
+        text = str(value).strip().lower()
+        if text in ("true", "1", "yes"):
+            return True
+        if text in ("false", "0", "no"):
+            return False
+        raise ValueError(f"{value!r} 不是布尔值")
+    if isinstance(current, int):
+        return int(str(value).strip())
+    if isinstance(current, float):
+        return float(str(value).strip())
+    if isinstance(current, str):
+        return str(value)
+    raise ValueError(f"不知道该把值写成什么类型（世界当前是 {type(current).__name__}）")
+
+
 def apply(
     proposal: Proposal,
     *,
@@ -170,10 +205,13 @@ def apply(
 ) -> dict:
     """执行提案 —— **必须先有人审批**，**必须读回确认真的变了**。
 
-    ⚠️ 两条都是踩出来的：
+    ⚠️ 三条都是踩出来的：
       · 没有 `approved_by` 就什么都不做（"审批"不能是个默认通过的参数）；
       · **不能只看返回码**判断成功：世界对不认识的字段会返回 200 + `changed: {}`
         ⇒ 动作什么都没改，而"applied=True"会是一句假话（实测过）。
+      · **值要带着正确的类型写回去，读回要连类型一起比**（#62）：世界的 `/_inject`
+        不做类型转换，写进去一个字符串会让服务在**运行时**崩；而按字符串比较的读回
+        检查会把这个错误报成"成功"。
     """
     if not approved_by.strip():
         return {"applied": False, "reason": "缺少审批人 —— 这条链路不允许无人审批执行",
@@ -186,22 +224,42 @@ def apply(
     call = ops_call or _mcp_ops_call
     reader = read_knob or read_world_knob
     knob = str(proposal.knob)
+
+    # ★ 先读**当前值**：它的类型就是写回去时该用的类型（不存在"猜 schema"这回事）
+    current = reader(proposal.service, knob)
+    try:
+        target = coerce_like(current, proposal.target_value)
+    except (TypeError, ValueError) as exc:
+        return {"applied": False, "observed": current,
+                "reason": (f"不敢写：读到的当前值是 {current!r}（{type(current).__name__}），"
+                           f"要写的 {proposal.target_value!r} 转不过去（{exc}）—— "
+                           f"类型对不上的写入会让服务在运行时崩，所以宁可不写"),
+                "audit_written": 0}
+
     arguments: dict[str, Any] = {
         "service": proposal.service,
-        "knobs": {knob: proposal.target_value},
+        "knobs": {knob: target},
     }
     payload = call("set_knobs", arguments)
     payload = dict(payload) if isinstance(payload, dict) else {"raw": str(payload)}
 
-    # ★ 读回：动作生效的唯一凭据（返回码不算）
+    # ★ 读回：动作生效的唯一凭据（返回码不算）。**类型也要比** —— 否则"把整数写成字符串"
+    #   这种改坏会被判成成功（#62 实测：值看着一样，服务却开始 500）。
     observed = reader(proposal.service, knob)
-    effect_ok = observed is not None and str(observed) == str(proposal.target_value)
+    effect_ok = (observed is not None
+                 and type(observed) is type(target)
+                 and observed == target)
     applied = bool(payload.get("allowed", payload.get("ok", False))) and effect_ok
     reason = ""
     if not effect_ok:
-        reason = (f"静默空操作：世界没有发生任何变化（读回 {knob}={observed!r}，"
-                  f"期望 {proposal.target_value!r}）—— 常见原因是名字用错"
-                  f"（变更记录里是 env 名，世界认的是旋钮名: {knob_name_from_env(knob, proposal.service)}）")
+        if observed is not None and str(observed) == str(target):
+            reason = (f"类型不对：读回 {knob}={observed!r}（{type(observed).__name__}），"
+                      f"期望 {target!r}（{type(target).__name__}）—— 值看着一样，但类型被改坏了，"
+                      f"服务会在运行时崩（这类'成功'是假的）")
+        else:
+            reason = (f"静默空操作：世界没有发生任何变化（读回 {knob}={observed!r}，"
+                      f"期望 {target!r}）—— 常见原因是名字用错"
+                      f"（变更记录里是 env 名，世界认的是旋钮名: {knob_name_from_env(knob, proposal.service)}）")
 
     written = append_audit({
         "type": "remediation_applied",
@@ -243,6 +301,50 @@ def verify(*, symptom: str, before: int | None, after: int | None,
             "delta": after - before, "lower_is_better": lower_is_better}
 
 
+def precheck_metric_signal(*, symptom: str, sent_before: int, ok_before: int | None,
+                           sent_after: int, ok_after: int | None) -> dict:
+    """前置检查：**这个指标在两种状态下都必须有信号**，否则不许下结论。
+
+    ⚠️ 为什么要单独立一道门（这是 #61 修完之后紧接着撞上的第二种错法）：
+
+      · #61 那种是**判据方向错了** —— 它会用漂亮的措辞把灾难说成修复；
+      · 这一种是**判据没错、但没有信号** —— 「修好了」这句话**根本没有依据**，
+        因为故障态本来就没有症状（这个指标对这个故障不敏感，或者故障压根没生效）。
+        它更隐蔽：数字全对、格式全对、结论很漂亮，只是**什么也没证明**。
+
+    规则三条（少一条就会得出不成立的结论）：
+
+      1. 两态都要有**样本**（`sent > 0`）—— 没发出订单时谈「改善/恶化」是空话；
+      2. 两态都要有**观测**（成功数是个数字，不是 `None`）——
+         「没测到」不等于「测到 0」（#26 的空绿，在测量侧的形态）；
+      3. **故障态必须真的有症状**（`ok_before < sent_before`）——
+         若故障态全部成功，说明这个指标上**看不到这个故障**，
+         此时无论恢复态是多少，「修好了」都是没有依据的 ⇒ 停在「不许下结论」。
+
+    ⚠️ 口径（写清楚，别让读的人自己猜）：成功数落在 **0（地板）** 时**仍然有信号** ——
+       方向可读（比故障态更差），但**幅度不可读**（这一次是 0，下一次还是 0，分不出来）。
+       所以它不算「没信号」；只是结论里**不许谈幅度**。
+    """
+    out = {"symptom": symptom, "before": ok_before, "after": ok_after,
+           "sent_before": sent_before, "sent_after": sent_after}
+    if sent_before <= 0 or sent_after <= 0:
+        return {**out, "ok": False, "status": "no-sample",
+                "why": (f"样本不足：发出订单数 {sent_before} → {sent_after} "
+                        f"（有一侧一笔都没发出去）⇒ 这个指标没有可比较的观测")}
+    if ok_before is None or ok_after is None:
+        missing = "故障态" if ok_before is None else "恢复态"
+        return {**out, "ok": False, "status": "no-observation",
+                "why": f"{missing}没有观测到成功数 —— 「没测到」不等于「测到 0」"}
+    if ok_before >= sent_before:
+        return {**out, "ok": False, "status": "no-signal-in-faulted-state",
+                "why": (f"前置检查未通过：故障态**全部成功**（{ok_before}/{sent_before}）"
+                        f"⇒ 这个指标上看不到故障（不敏感，或故障没生效）。"
+                        f"此时「修好了」是没有依据的结论 —— 不许下结论")}
+    return {**out, "ok": True, "status": "signal-in-both-states",
+            "why": (f"两态都有信号 ✓（故障态 {ok_before}/{sent_before} 真失败过；"
+                    f"恢复态 {ok_after}/{sent_after} 有观测）")}
+
+
 def append_audit(record: dict, *, path: Path | None = None) -> int:
     """写一条闭环账本（`runs/_remediation.ndjson`）。返回写入条数（0/1）。"""
     target = path or REMEDIATION_AUDIT_PATH
@@ -260,6 +362,8 @@ __all__ = [
     "REVERSIBLE_ACTIONS",
     "append_audit",
     "apply",
+    "coerce_like",
+    "precheck_metric_signal",
     "propose",
     "verify",
 ]

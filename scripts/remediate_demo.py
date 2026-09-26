@@ -44,7 +44,12 @@ sys.path.insert(0, str(ROOT / "src"))
 import httpx                                                          # noqa: E402
 
 from rca.remediation import apply as remediation_apply                # noqa: E402
-from rca.remediation import propose, verify                           # noqa: E402
+from rca.remediation import (                                         # noqa: E402
+    knob_name_from_env,
+    precheck_metric_signal,
+    propose,
+    verify,
+)
 
 ORDER = "http://127.0.0.1:8080"
 INVENTORY = "http://127.0.0.1:8081"
@@ -117,6 +122,34 @@ def drive_traffic(orders: int) -> tuple[int, int]:
     return orders, ok
 
 
+def fault_is_armed(records: list[dict], knobs: dict | None = None) -> tuple[bool, str]:
+    """核对**故障真的施加上了**：每条变更记录说"被改成 `to`"，世界现在就必须是那个值。
+
+    ⚠️ 为什么要有这一步（#63 的实测）：注入器有两种模式 ——
+       `scenario` 打完流量会在 [5/6] **撤销故障**（免得污染下一个场景），`apply` 只施加。
+       少做一步，就会在一个**健康**世界上量出"故障态"，
+       然后把"没有症状"读成"修好了" —— 又一个"用漂亮的措辞报告不成立的结论"。
+       所以**动手之前**先把这件事量一次；量不上就停在这里，世界一个字节都不动。
+
+    `knobs` 可以注入（`{服务: {旋钮: 值}}`）—— 那样这条判断就能**离线被测**，
+    否则它只能靠"真跑一次世界"来体现，而真跑一次要两分钟、还要往世界里注入故障。
+    """
+    if knobs is None:
+        knobs = {svc: knobs_of(svc) for svc in PORTS}
+    if not records:
+        return False, "没有变更记录 ⇒ 无从核对故障是否施加（也不会有可提案的依据）"
+    for rec in records:
+        svc = str(rec.get("target") or "")
+        name = knob_name_from_env(str(rec.get("key") or ""), svc)
+        if not (svc and name):
+            continue
+        now = knobs.get(svc, {}).get(name)
+        if str(now) != str(rec.get("to")):
+            return False, (f"{svc}.{name} 现在是 {now!r}，而变更记录说它应当被改成 "
+                           f"{rec.get('to')!r} ⇒ 故障**没有**施加在这个世界上")
+    return True, f"变更记录里 {len(records)} 条改动，在世界里都对得上 ✓（故障确实在）"
+
+
 def measure(orders: int) -> dict:
     before = read_world()
     sent, ok = drive_traffic(orders)
@@ -164,14 +197,32 @@ def main() -> int:
 
     if not args.skip_inject:
         print(f"\n  ── 注入 {args.fault}（用项目自己的注入器，可逆）──")
-        proc = subprocess.run(
-            [sys.executable, "scripts/inject_fault.py", "scenario", args.fault],
-            cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
-        )
-        print(f"     注入 exit={proc.returncode}  {(proc.stdout or '').strip().splitlines()[-1][:100] if proc.stdout else ''}")
-        if proc.returncode != 0:
-            print(f"     ✗ 注入失败：{(proc.stderr or '')[-300:]}")
-            return 2
+        # ⚠️ **两步，缺一不可**（harness-log #63 —— 第一版只做了第一步，于是
+        #    "故障态"其实是在一个**健康**世界上量的，量出 10/10 全部成功）：
+        #    ① `scenario`：打一遍真实流量，并留下**变更记录**（M5 提案的唯一依据）。
+        #      但它 [5/6] 会把故障**撤销**（为了不污染下一个场景）⇒ 跑完世界是干净的。
+        #    ② `apply`：把故障**再施加回去** —— 这样"故障态"才是真的故障态。
+        for step in ("scenario", "apply"):
+            proc = subprocess.run(
+                [sys.executable, "scripts/inject_fault.py", step, args.fault],
+                cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            print(f"     {step:<9} exit={proc.returncode}")
+            if proc.returncode != 0:
+                print(f"     ✗ {step} 失败：{(proc.stderr or '')[-300:]}")
+                return 2
+
+    # 变更记录是 M5 提案的**唯一**依据；顺便用它核对"故障真的施加上了没有"
+    changes = _latest_changes()
+
+    # ⚠️ 动手之前先量一次**世界真的坏了吗**（#63）：注入器有两种模式，少做一步
+    #    就会拿一个健康世界当"故障态"，然后把"没症状"读成"修好了"。
+    armed, why = fault_is_armed(changes["records"])
+    print(f"\n  ── 核对故障是否真的在（依据 {changes['source']}）──")
+    print(f"     {why}")
+    if not armed:
+        print("     ✗ 故障没施加上 ⇒ **不下结论、也不动世界**（先修注入，再量症状）")
+        return 2
 
     print(f"\n  ── 注入后量症状（发 {args.orders} 笔订单）──")
     before = measure(args.orders)
@@ -184,7 +235,6 @@ def main() -> int:
     report["before"] = before
 
     # ---- M5：提案 → 人审批 → 执行（经 MCP 门）
-    changes = _latest_changes()
     print(f"\n  ── M5 提案（依据 {changes['source']} 的变更记录）──")
     proposals = propose(changes["records"])
     if not proposals:
@@ -226,6 +276,24 @@ def main() -> int:
         print(f"  证据已写：{EVIDENCE.relative_to(ROOT)}")
         return 4
 
+    # ★ 前置检查：**两种状态下指标都必须有信号**，否则不许下结论（#61 之后的第二种错法）
+    #   它是纯函数、可离线测；在这里的作用是"宁可不下结论，也不给一个没依据的结论"。
+    pre = precheck_metric_signal(symptom="成功订单数",
+                                 sent_before=before["orders_sent"], ok_before=before["orders_ok"],
+                                 sent_after=after["orders_sent"], ok_after=after["orders_ok"])
+    report["precheck"] = pre
+    print("\n  ── 前置检查（这个指标有没有信号）──")
+    print(f"     {pre['why']}")
+    if not pre["ok"]:
+        report["verdict"] = {"status": "measurement-no-signal", "why": pre["why"]}
+        report["outcome"] = "measurement-no-signal"
+        EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+        EVIDENCE.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8", newline="\n")
+        print("\n  ✗ 前置检查未通过 ⇒ **不下结论**（构造不出有依据的结论，就不给结论）")
+        print(f"  证据已写：{EVIDENCE.relative_to(ROOT)}")
+        return 5
+
     v_ok = verify(symptom="成功订单数", before=before["orders_ok"], after=after["orders_ok"],
                   lower_is_better=False)      # ★ 成功数**越大越好**（否则 10→0 会被判成改善 ✗）
     # 这两个只当**诊断量**（看着好看/难看都不作判据）
@@ -256,6 +324,21 @@ def main() -> int:
     # 症状级结论：两侧测量都有效、**判据（成功订单数）改善**、而且提案涉及的旋钮真的到位
     symptom_ok = (before["valid"] and after["valid"] and targets_ok
                   and v_ok["status"] == "improved")
+    # ★ **两把尺子分歧**：必须一起读，不许只挑好看的那把报（同 D10 的原则 ——
+    #   关键词与裁判分歧时，分歧本身就是最有信息量的东西）。
+    #   ⚠️ 这不是"谁对谁错"：判据（成功订单数）是**用户可感**的，
+    #   诊断量（下游放大倍数 / 错误调用）是**与故障因果对齐**的；
+    #   重试既放大流量、也把失败订单救回来 —— 撤掉它，两者会朝相反方向动。
+    metrics_disagree = (v_ok["status"] != "improved"
+                        and v_ratio["status"] == "improved"
+                        and v_err["status"] == "improved")
+    report["metrics_disagree"] = {
+        "value": metrics_disagree,
+        "why": ("用户可感的症状（成功订单数）没有变好，而与故障因果对齐的量"
+                "（下游放大倍数 / 错误调用）变好了 —— 重试既是放大流量的机制，"
+                "也是把失败订单救回来的机制：撤掉它，流量降下来，被救的订单也没了"
+                if metrics_disagree else "两把尺子方向一致（或都没改善）"),
+    }
     report["outcome"] = ("fixed" if symptom_ok else
                          ("action-ok-symptom-partial" if action_ok else "action-failed"))
     EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
@@ -290,6 +373,15 @@ def main() -> int:
                   "也不是什么都没做。")
             print("           要**全量**恢复，请走人的那扇门："
                   f".\\.venv\\Scripts\\python.exe scripts\\inject_fault.py revert {args.fault}")
+    if metrics_disagree:
+        print("        ⚠️ **两把尺子分歧**（要一起读，不许只挑好看的那把）：")
+        print(f"           · 用户可感的症状（{v_ok['symptom']}）：{v_ok['status']}"
+              f"（{v_ok.get('before')} → {v_ok.get('after')}）")
+        print(f"           · 与故障**因果对齐**的量：下游放大倍数 {v_ratio['status']}"
+              f"（{v_ratio.get('before', '?')}/100 → {v_ratio.get('after', '?')}/100）、"
+              f"错误调用 {v_err['status']}（{v_err.get('before')} → {v_err.get('after')}）")
+        print("           ⇒ 判决：**动作对（故障被削弱了），但对用户来说更差了** —— "
+              "重试既放大流量、也救回订单，撤掉它两头都会露出来。")
     print(f"\n  证据已写：{EVIDENCE.relative_to(ROOT)}")
     return 0 if symptom_ok else (3 if action_ok else 1)
 
