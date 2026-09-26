@@ -64,7 +64,7 @@
 .\.venv\Scripts\python.exe scripts\reduce_run.py
 uv run python scripts\reduce_run.py
 
-# 错 —— 它会用系统 Python，看不到项目依赖
+# 错 —— 它会用系统 Python，看不到项目依赖（**反例，守卫放行**）
 python scripts\reduce_run.py
 ```
 

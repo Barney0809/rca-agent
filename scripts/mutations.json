@@ -473,6 +473,47 @@
       }
     ]
   },
+  "outward_doc_claims_do_not_drift": {
+    "harness_log": [
+      "#72"
+    ],
+    "why": "README is the first page a stranger or an interviewer reads, and its 'honest boundaries' section had FOUR stale claims, all found by hand during wrap-up: a retired accuracy delta (9.5pp, superseded by 4.8pp after the scoring criterion was fixed in #48), a retired noise band (plus/minus 7pp, measured at 14.3pp in #46), a claim that deepseek-v4-pro was never tested (a small two-arm comparison had been run), and a claim that CI had never run on a GitHub runner because 'this repo has no remote' (the remote existed and both CI jobs were green). The existing guards only check that README lists every doc and does not duplicate counts -- nothing checked whether README's CLAIMS were still true, so they drifted. The two new reconciliations are deliberately not string blacklists: README's numbers are checked against the machine-generated page, and README's statements against the facts recorded in the authority docs.",
+    "tests": [
+      "tests/test_docs.py"
+    ],
+    "mutations": [
+      {
+        "id": "outward-a-restore-the-retired-noise-band",
+        "desc": "Put the retired noise band back into README (plus/minus 7 percentage points instead of the measured 14.3). This is exactly what drifted for weeks: the number was true when it was written, and nothing noticed when the measurement moved on.",
+        "file": "README.md",
+        "find": "轮间波动 **14.3 个百分点**",
+        "replace": "轮间波动 **±7 个百分点**",
+        "expect_red": [
+          "tests/test_docs.py::test_readme_numbers_agree_with_the_generated_page"
+        ]
+      },
+      {
+        "id": "outward-b-claim-the-ci-never-ran",
+        "desc": "Put back the sentence claiming CI has never run on a GitHub runner. The evidence that makes it false is recorded in docs/00-状态.md (both jobs green), so the reconciliation must catch the contradiction -- and if that evidence ever disappears, the same test reports 'cannot find the evidence' instead of silently passing.",
+        "file": "README.md",
+        "find": "**CI 已在 GitHub Actions 上真跑过，两个作业都绿**",
+        "replace": "**CI 从未在 GitHub runner 上跑过**",
+        "expect_red": [
+          "tests/test_docs.py::test_readme_does_not_contradict_the_authority_docs"
+        ]
+      },
+      {
+        "id": "outward-c-bare-python-in-the-shortest-path",
+        "desc": "Put a bare `python` back into the 'shortest path to a full verification' block of docs/00-状态.md. Bare python on this machine resolves to WindowsApps and fails with a misleading ModuleNotFoundError -- so the person who gets fooled is the one following the docs (a stranger), not the one writing them (P1).",
+        "file": "docs/00-状态.md",
+        "find": "docker compose up -d --build\n.\\.venv\\Scripts\\python.exe scripts\\smoke_world.py",
+        "replace": "docker compose up -d --build\npython scripts\\smoke_world.py",
+        "expect_red": [
+          "tests/test_docs.py::test_no_doc_shows_a_bare_python_command"
+        ]
+      }
+    ]
+  },
   "historical_encoding_and_parsing": {
     "harness_log": [
       "#2",
@@ -2100,7 +2141,8 @@
   },
   "inject_history_is_out_of_band": {
     "harness_log": [
-      "#65"
+      "#65",
+      "#73"
     ],
     "why": "#65 (ADR-0009): the one thing that most needed a log was the only thing with none -- `/_inject` left no trace, so when an integration test went red on a loop of 5xx, nobody could say who had dirtied the world. The fix must NOT go into the service log (the Agent reads logs; that would hand it the answer and kill the F4 scenario), so it lives in a bounded in-memory buffer behind a read-only endpoint the Agent's toolbox cannot reach. Two mutants: an unbounded buffer, and a trace that logs (the information leak).",
     "tests": [
@@ -2130,10 +2172,20 @@
       },
       {
         "id": "hist-c-anonymous-mutation",
-        "desc": "Drop the self-reported `by` from the test fixture, so every knob change it makes lands in the history as anonymous. That is precisely the state in which #65 died: the instrument exists, the world is provably dirty, and the record cannot say who did it.",
+        "desc": "Stop self-reporting the origin: drop `by` from the payload entirely, so even an explicit caller-supplied value never reaches the world and the change lands in the history as anonymous. Re-enacting #65 (nobody could tell who dirtied the world). NOTE: the first version of this mutant only changed the DEFAULT of `by`, while the target test passes `by=` explicitly -- so the mutant had no effect on it and the case stayed green (see #73).",
         "file": "tests/conftest.py",
         "find": "        payload[\"by\"] = by or f\"tests:{os.environ.get('PYTEST_CURRENT_TEST', 'unknown')}\"",
-        "replace": "        payload[\"by\"] = by",
+        "replace": "        payload.pop(\"by\", None)          # 变异：不再自报来源（连显式传入的也丢）",
+        "expect_red": [
+          "tests/test_world.py::test_inject_history_records_who_changed_the_knobs"
+        ]
+      },
+      {
+        "id": "hist-d-record-nothing",
+        "desc": "Make the change never reach the world at all: return right before the POST. Nothing errors and the endpoint would still record fine -- but no record is appended, so 'the newest record is newer than before' must fail. This is the assertion that replaced the old 'the history grew by exactly one entry' check, which was NOT cap-aware: the history is a 64-entry ring buffer, so once it filled up that assertion went red on a perfectly healthy world (#73). The mutant lives in tests/conftest.py rather than in world/common/runtime.py because the world integration tests exercise the code INSIDE the containers -- a host-side mutation of world/common can never reach them.",
+        "file": "tests/conftest.py",
+        "find": "        r = self.client.post(f\"{SERVICES[service]}/_inject\", json=payload)",
+        "replace": "        return {}                        # 变异：改动不进世界（也不进历史）\n        r = self.client.post(f\"{SERVICES[service]}/_inject\", json=payload)",
         "expect_red": [
           "tests/test_world.py::test_inject_history_records_who_changed_the_knobs"
         ]
@@ -2195,7 +2247,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**361 passed / 1 skipped**",
+        "find": "**364 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -2205,7 +2257,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**59 组 / 154 个变异体，全部 SEALED**",
+        "find": "**60 组 / 158 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -2215,7 +2267,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**82 条**（其中 **72 条**由变异测试证明能变红，**10 条**",
+        "find": "封堵清单：**84 条**（其中 **74 条**由变异测试证明能变红，**10 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"

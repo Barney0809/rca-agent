@@ -11,11 +11,21 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 from collections import Counter
+from pathlib import Path
 
 import httpx
 import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# ⚠️ 历史是**定长环形缓冲**（#73）：用例里要拿它当上界用，所以直接引用那个常量，
+#    而不是在用例里再写一遍 64 —— 两处各写一份，迟早走散（第 7 条）。
+from world.common.runtime import INJECT_HISTORY_LIMIT  # noqa: E402
 
 ORDER_URL = os.environ.get("WORLD_ORDER_URL", "http://127.0.0.1:8080")
 INVENTORY_URL = os.environ.get("WORLD_INVENTORY_URL", "http://127.0.0.1:8081")
@@ -335,15 +345,34 @@ async def test_inject_history_records_who_changed_the_knobs(clean_world):
     clean_world.inject("order", {"slow_op_ms": 250}, by="tests:inject_history")
     after = clean_world.inject_history("order")
 
-    assert len(after) == len(before) + 1, f"真实改动必须留痕：{len(before)} → {len(after)}"
-    rec = after[-1]
+    # ⚠️ **不许用"长度 +1"来断言留痕**（#73 的现场）：
+    #    历史是**定长的环形缓冲**（`INJECT_HISTORY_LIMIT = 64`），装满之后
+    #    新记录会**挤掉最老的一条** —— 长度原地不动，于是"长度 +1"这条断言
+    #    在容器跑了足够多次注入之后**必然变红**，而世界本身一点问题都没有。
+    #    （它上次就是这样红在 CI 门禁上的：我自己的用例默认了"容器是新的"。）
+    #    ⇒ 正确的判据是"**最上面那条是新的**"，与容量无关。
+    newest = after[-1]
+    oldest_before_ts = max((float(h.get("ts", 0)) for h in before), default=0.0)
+    assert float(newest.get("ts", 0)) > oldest_before_ts, (
+        f"真实改动必须留痕：历史里最新一条的时间戳 {newest.get('ts')} "
+        f"没有比改动前的记录 {oldest_before_ts} 更新（{len(before)} → {len(after)} 条）"
+    )
+    rec = newest
     assert rec["service"] == "order" and "slow_op_ms" in rec["changed"], rec
     assert rec["by"] == "tests:inject_history", (
         "必须记下**自报的来源** —— 世界只能知道对端是 127.0.0.1，猜不出来源（ADR-0009 决定 2）"
     )
 
+    # 定长缓冲的上界也要顺带钉住：容量变了要有人知道（真正的上界用例在 test_offline.py）
+    assert len(after) <= INJECT_HISTORY_LIMIT, (
+        f"历史有 {len(after)} 条，超过声明的上界 {INJECT_HISTORY_LIMIT} 条"
+    )
+
     clean_world.inject("order", {"slow_op_ms": 250}, by="tests:inject_history")
-    assert len(clean_world.inject_history("order")) == len(after), "值没变 ⇒ 不该进历史（空操作）"
+    assert clean_world.inject_history("order")[-1]["ts"] == rec["ts"], (
+        "值没变 ⇒ 不该进历史（空操作）—— 否则历史里全是噪声，"
+        "而「谁改过」这件事会被稀释到查不出来"
+    )
 
     # ★ **不许有匿名改动**（ADR-0009 决定 2）：留痕的意义就在于"查得出是谁改的"，
     #   一条 `by` 为空的记录等于没有留痕 —— 而 #65 卡住的原因正是"不知道谁改的"。

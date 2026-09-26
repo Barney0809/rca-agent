@@ -233,6 +233,175 @@ def test_doc_scan_survives_a_project_path_that_looks_skippable(tmp_path, monkeyp
 
 
 # --------------------------------------------------------------------------- #
+# #72：对外那一页的**说法**也必须被守（README 漂了四处，没人发现）
+# --------------------------------------------------------------------------- #
+#
+# 现场（2026-09-27，收尾时"顺手"核了一下发现的）：
+#   README 是对外第一页，而它的**六、诚实边界**那一节里有四处**已经过期**：
+#     · "那 9.5 个百分点"——判据修过（#48）后是 **4.8**，而同一节上面的表格早已写成 95.2% vs 100%；
+#     · "轮间波动是 ±7 个百分点"——#46 实测（按当前判据）是 **14.3 个百分点**；
+#     · "**未测** deepseek-v4-pro"——其实做过一次小样本对照（两臂各 3 次，`max_steps=40`）；
+#     · "**CI 从未在 GitHub runner 上跑过**（本仓库没有 git 远程）"——远程早就有，CI 已多次双绿。
+#
+# 为什么会漂：现有守卫只管"README 有没有列出 docs/ 下的每份文档"和"不许复制计数"，
+# **没有任何守卫管 README 的断言是否过期**。
+#
+# ⚠️ 而且**不能**用"把这些过期字符串列成黑名单"的写法（那种守卫天然管不住下一次）——
+#    下面两条都是**对账**：
+#      ① README 的数字 ↔ **机器从存档生成的页面**（页面是唯一权威，README 是手写的）；
+#      ② README 的说法 ↔ **权威文档里记着的事实**（事实在，则那句话必错）。
+#    两侧任一改动都能让它变红（见变异组 `outward_doc_claims_do_not_drift`）。
+
+BARE_PY_RE = re.compile(r"^(python3?|py)\b")
+
+
+def _fenced_commands(text: str) -> list[tuple[int, str, str]]:
+    """抽出 markdown fenced code block 里的**命令行**：`(行号, 命令, 它上面的注释)`。
+
+    ⚠️ 四条排除/放行规则都是为了不误伤、也不留后门：
+      · 空行、**有缩进的行**（缩进通常是被采集的**输出**，例如 `  python : D:\\...\\python.exe`）；
+      · `#` 开头的注释行、提示符行（`>` / `PS>` / `$`）；
+      · **反例放行**：命令**紧上面那条注释**里写了「反例」二字才放行 ——
+        `AGENTS.md` 那条「错：裸 python」的示例必须能写出来，
+        但放行是**显式标注**的（谁把标注删了，守卫就会拦住他自己写的反例）。
+    """
+    out: list[tuple[int, str, str]] = []
+    inside = False
+    last_comment = ""
+    for i, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            last_comment = ""
+            continue
+        if not inside or not line.strip():
+            continue
+        if line.startswith((" ", "\t")):          # 缩进 = 输出，不是命令
+            continue
+        if line.lstrip().startswith(("#", ">", "$")):
+            last_comment = line.lstrip()
+            continue
+        out.append((i, line.rstrip(), last_comment))
+        last_comment = ""
+    return out
+
+
+def test_no_doc_shows_a_bare_python_command() -> None:
+    """文档里的命令**不许用裸 `python`** —— 这是 P1 那个坑的文本面（#72）。
+
+    为什么它值得一条守卫：本机 PATH 上的 `python` **不是**项目虚拟环境
+    （实测指向 `...\\WindowsApps\\python.exe`），裸用会得到
+    `ModuleNotFoundError: No module named 'rca'` —— 那看起来像"依赖没装"，
+    而真相是"命令写错了"（AGENTS 第 1 条 P1）。
+
+    ⇒ 陌生人照抄文档就会撞上这个假象，而**被骗的是读文档的人**，不是写文档的人。
+
+    实测抓到 4 处（2026-09-27）：`AGENTS.md` 的反例（已显式标注放行）、
+    `docs/00` 的「一次完整验证的最短路径」、`docs/10` 的三条 `guard_replay` 命令
+    —— **其中 docs/00 那条最糟：它正是给陌生人照抄用的最短路径**。
+    """
+    allowed_prefixes = (".\\.venv\\Scripts\\python.exe", "./.venv/bin/python", "uv run python",
+                        "uv run --", ".venv\\Scripts\\python.exe")
+    docs = [ROOT / "README.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").glob("*.md"))]
+
+    checked = 0
+    waived = 0
+    bad: list[str] = []
+    for p in docs:
+        rel = p.relative_to(ROOT).as_posix()
+        for n, cmd, comment in _fenced_commands(p.read_text(encoding="utf-8")):
+            checked += 1
+            if not BARE_PY_RE.match(cmd):
+                continue
+            if cmd.startswith(allowed_prefixes):
+                continue
+            if "反例" in comment:                 # 显式标注的反例，才放行
+                waived += 1
+                continue
+            bad.append(f"{rel}:{n}: {cmd[:90]}")
+
+    assert checked >= 40, f"只扫到 {checked} 条命令 —— 解析规则可能坏了（守卫会空转）"
+    assert waived <= 3, (
+        f"有 {waived} 条裸 python 走了「反例」放行 —— 放行口子被用得太宽，"
+        f"它已经开始掩盖真实违规了（放行只该给 AGENTS 那条教学示例用）"
+    )
+    assert not bad, (
+        "这些文档里的命令用了**裸 python**（P1）：\n  " + "\n  ".join(bad) + "\n"
+        "⇒ 裸 `python` 会给出一个**错误的事实**（看起来像依赖没装），而读文档的人无从分辨。\n"
+        "   改成 `.\\\\.venv\\\\Scripts\\\\python.exe <脚本>` 或 `uv run python <脚本>`。"
+    )
+
+
+def test_readme_numbers_agree_with_the_generated_page() -> None:
+    """README 的对外数字必须与**机器从存档生成的页面**一致（#72）。
+
+    页面（`demo/rca-demo.html`）由 `scripts/make_demo.py` 从归档算出、且逐字节可重放
+    （`test_committed_demo_page_is_reproducible_from_the_archives` 守着这件事），
+    所以它是对外数字的**唯一权威**；README 是手写的 ⇒ 手写的那个会漂。
+
+    方向是**单向**的：页面上的数必须在 README 里出现。页面变了而 README 没跟着改 ——
+    这正是 #72 的四处漂移里最典型的一类（判据修过、页面重算过，README 还是旧的）。
+    """
+    page = (ROOT / "demo" / "rca-demo.html").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    acc = re.search(r"<span class=\"num\">([\d.]+)%<span class='dim'>（按当前判据）", page)
+    delta = re.search(r"准确率(?:反而)?<strong>(?:低了|高了) ([\d.]+) 个百分点</strong>", page)
+    band = re.search(r"轮间波动 ([\d.]+) 个百分点之内", page)
+    for label, m in (("准确率（按当前判据）", acc), ("准确率差", delta), ("轮间波动带", band)):
+        assert m, f"页面上找不到机器算出来的『{label}』—— 模板变了？守卫不能退化成空绿"
+
+    for label, m, suffix in (("准确率（按当前判据）", acc, "%"),
+                             ("准确率差", delta, " 个百分点"),
+                             ("轮间波动带", band, " 个百分点")):
+        value = m.group(1) + suffix
+        assert value in readme, (
+            f"README 里没有出现页面上的{label} **{value}** —— "
+            f"要么 README 过期了（#72：它漂过 9.5 / ±7 两个旧数），"
+            f"要么页面重新生成后忘了同步 README"
+        )
+
+    # ⚠️ 两处**已被取代**的旧数：它们确实在 README 里公开发表过，所以额外地钉一下 ——
+    #    这不是"过期字符串黑名单"那种写法（那种天然管不住下一次），
+    #    它只是保证**这两个具体数字**不会再回来；真正通用的是上面那段与页面的对账。
+    for retired in ("9.5 个百分点", "±7 个百分点"):
+        assert retired not in readme, (
+            f"README 里又出现了已被取代的旧数「{retired}」—— "
+            f"判据修正（#48）与噪声带实测（#46）之后，正确的数在生成页面上"
+        )
+
+
+def test_readme_does_not_contradict_the_authority_docs() -> None:
+    """README 的**说法**不许与权威文档里的事实矛盾（#72）。
+
+    ⚠️ 这不是"过期字符串黑名单"：每一条都由**两半**组成 ——
+        · `stale`：README 里**不许出现**的说法；
+        · `evidence`：让那句话变错的**事实**，它必须能在权威文档里找到。
+    若哪天事实不在了（比如 CI 作业被删），这条会先报"找不到证据"，
+    **逼着人重新核对**，而不是继续假装 README 是错的或对的。
+
+    README 是面试官/陌生人的第一入口：那里说过期的话，等于**把做过的事说成没做**，
+    或者把没做的事说成做了 —— 两种都直接违背本项目的"诚实边界"那一节。
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    status = (ROOT / "docs" / "00-状态.md").read_text(encoding="utf-8")
+    log = (ROOT / "docs" / "harness-log.md").read_text(encoding="utf-8")
+
+    checks = [
+        ("CI 从未在 GitHub runner 上跑过", "已在 GitHub Actions 上真跑过", status, "docs/00-状态.md"),
+        ("本仓库没有 git 远程", "github.com/Barney0809/rca-agent", status, "docs/00-状态.md"),
+        ("**未测** `deepseek-v4-pro`", "v4-pro @40", log, "docs/harness-log.md"),
+    ]
+    for stale, evidence, where_text, where_name in checks:
+        assert evidence in where_text, (
+            f"`{where_name}` 里找不到证据「{evidence}」—— 这条对账已过期，"
+            f"请核对事实后更新本用例与 README（别让它变成一条永远为真的空话）"
+        )
+        assert stale not in readme, (
+            f"README 里还写着「{stale}」，而 `{where_name}` 里的事实是「{evidence}」—— "
+            f"README 说了过期的话（#72）"
+        )
+
+# --------------------------------------------------------------------------- #
 # P11：封堵总览表的**行边界**必须由机器守着
 # --------------------------------------------------------------------------- #
 SEAL_ID_RE = re.compile(r"#\d+|P\d+")
