@@ -625,8 +625,12 @@ def _run_multi_slice(
         steps=res.n_llm_calls,
         tool_calls=res.total_tool_calls,
         cost_yuan=res.total_cost_yuan + jd.get("judge_cost_yuan", 0.0),
-        input_tokens=0,          # 多 Agent 的 token 汇总见 detail
-        output_tokens=0,
+        # ★ #71：这里原来写死 0（注释说"多 Agent 的 token 汇总见 detail"），
+        #   而 detail 里**从来没有过 token** —— 于是归档里有"花了多少钱"，
+        #   却没有任何"钱是怎么花出来的"的原料。成本无法事后核对，
+        #   对账差额只能靠猜（#70 卡住的正是这里）。
+        input_tokens=res.total_input_tokens,
+        output_tokens=res.total_output_tokens,
         elapsed_s=res.elapsed_s,
         finished=all(h.finished for h in res.hypotheses)
         and all(c.finished for c in res.cross_exams)

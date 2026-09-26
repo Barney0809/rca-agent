@@ -1298,3 +1298,66 @@ def test_inject_history_never_touches_the_service_log():
         f"Agent 一 grep 日志就拿到答案，F4 场景失效（ADR-0009 决定 1）。"
         f"留痕只能走带外端点 `/_inject_history`。"
     )
+
+
+# ================================================================
+# #70：成本对账的口径 —— **账户余额不是项目成本**
+# ================================================================
+#
+# 现场：收尾时核了下余额，发现它从 ¥40.66 掉到 ¥30.49（**跌了 ¥10.17**），
+#      而我记录在案的花费只有 ¥3.41 ⇒ **¥6.76 对不上**，而且**查不下去**
+#      （当时归档里连 token 都没有 —— 那个缺口是 #71）。
+#
+# 后来查清了，结论跟"计价模型错了"无关，是**口径**错了：
+#
+#   · 这个 API Key **同时被驱动"我"（本代理本身）的大模型在用**；
+#   · DSH 的会话记录里每次调用都带 usage：本次会话 **876 次调用**
+#     （全部 `deepseek-flash`）累计 **3.43 亿 cache-read + 44.9 万未命中输入
+#     + 64.8 万输出** token；
+#   · 按**本项目自己的单价表**粗估 ≈ **¥11.3** —— 与那笔"对不上"的差额
+#     **同一量级**（其中单是 cache-read 一项就有 ¥6.85，和 ¥6.76 几乎撞上）。
+#
+# ⇒ `total_balance` 是**账户级**的：它把"代理自己思考的开销"也算进去了。
+#   项目永远只该为**自己的运行**记账，而这笔账的正确做法是
+#   **自己记的 token × 单价**（那条链路现在有 #71 的守卫盯着：
+#   没有 token 的成本数字根本不可核对）。
+#
+# 顺带排掉的两个猜想（都实测过）：
+#   · **峰谷时段算错**？—— 用余额接口自己的 `Date` 响应头核对过真实时间
+#     （本机时钟与它差 0.8 秒），当时是**周六凌晨** ⇒ 全天谷时，`off_peak` 是对的；
+#   · **缓存字段没读对**？—— 856 条录制响应的 usage 里
+#     `prompt_cache_hit_tokens` 与 `prompt_cache_miss_tokens` **都在**，
+#     且两者之和 == `prompt_tokens` ⇒ 计价函数的原料是对的。
+
+def test_no_project_code_treats_the_account_balance_as_its_own_cost():
+    """项目代码**不许**调 `/user/balance` 去当「本项目花了多少钱」。
+
+    为什么这是一条守卫而不是一句提醒：余额这个数字**看起来权威**
+    （它是账单，而成本估算是模型算的），所以"用它核对一下"是极自然的冲动 ——
+    我自己就是这么掉进去的，并因此花了半轮时间去追一个**根本不存在的模型偏差**。
+
+    ⚠️ 跳过 `runs/`：那里放的是**临时诊断脚本**（被 gitignore，不进仓库），
+       "量余额"正是排查 #70 时该做的事 —— 那是诊断，不是产品代码。
+    """
+    root = Path(__file__).resolve().parent.parent
+    skip = (".venv", "rca-mutants", "__pycache__", "runs", ".git", "node_modules")
+    hits: list[str] = []
+
+    for p in sorted(root.rglob("*.py")):
+        rel = p.relative_to(root)
+        if any(part in skip for part in rel.parts):
+            continue
+        # ⚠️ 跳过**守卫自己**：它必须能写出它禁止的那两个字符串
+        #    （排查 #70 的经过就写在上面那段注释里）——不跳的话它会自己抓自己。
+        if p.resolve() == Path(__file__).resolve():
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if "user/balance" in line or "total_balance" in line:
+                hits.append(f"{rel.as_posix()}:{i}")
+
+    assert not hits, (
+        "这些地方在拿**账户余额**当项目成本：\n  " + "\n  ".join(hits) + "\n"
+        "余额是**账户级**的 —— 它同时包含驱动本代理的大模型的开销（#70 实测同一量级：¥11.3 vs ¥6.76），\n"
+        "所以它不能当「本项目花了多少」的证据。要核成本，请用自己记录的 token × 单价（#71）。"
+    )
+

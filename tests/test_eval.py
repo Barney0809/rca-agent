@@ -1190,6 +1190,57 @@ def test_multi_attempt_carries_every_components_trace():
     assert roles == {"logs", "metrics", "change"}
     assert all(t["steps"] for t in attempt.trace), "每个环节都要带自己的工具调用"
 
+
+def test_multi_attempt_records_the_tokens_the_cost_was_computed_from():
+    """**#71**：归档里"花了多少钱"必须伴随"钱是怎么花出来的"。
+
+    现场：多 Agent 那一路把 `input_tokens` / `output_tokens` **写死成 0**
+    （注释还写着"token 汇总见 detail"，而 `detail` 里**从来没有过 token**）。
+    后果不是"少了个字段"，而是：**成本无法事后核对**。
+
+    这一条正是 #70 卡住的地方 —— 余额少了 ¥6.76，而"我记录的 ¥3.41"
+    到底是模型算错了、还是别的东西花了钱，**谁都查不下去**：
+    token 是成本的原料，原料没留，账就永远对不上。
+
+    ⇒ 这里钉两件事：① 存档里的 token 非零；② 它**恰好等于**各环节之和
+      （不是拍了个数、也不是只统计了一部分环节）。
+    """
+    from unittest.mock import patch
+
+    from eval.runner import _run_multi_slice
+    from eval.scenarios import SCENARIOS
+    from rca.agents.coordinator import CrossExam, MultiAgentResult, Verdict
+    from rca.agents.specialist import Hypothesis
+
+    fake = MultiAgentResult()
+    fake.hypotheses = [
+        Hypothesis(role=r, name=r, claim="c", input_tokens=1000, output_tokens=100)
+        for r in ("logs", "metrics", "change")
+    ]
+    fake.cross_exams = [
+        CrossExam(role=r, original_claim="c", input_tokens=2000, output_tokens=200)
+        for r in ("logs", "metrics", "change")
+    ]
+    fake.verdict = Verdict(root_cause="c", input_tokens=3000, output_tokens=300)
+    fake.guard_input_tokens = 500
+    fake.guard_output_tokens = 50
+
+    with patch("rca.agents.coordinator.diagnose_multi", lambda *a, **k: fake):
+        attempt = _run_multi_slice(
+            client=None, ctx=None, fid="F8", rnd=1, score=SCENARIOS["F8"],
+            model=None, max_steps=22, cross_exam_steps=22,
+        )
+
+    # 3×1000（调查）+ 3×2000（质证）+ 3000（裁决）+ 500（护栏审查）= 12500
+    assert attempt.input_tokens == 12_500, (
+        f"存档里的输入 token 是 {attempt.input_tokens}，应当是各环节之和 12500 —— "
+        "写死 0 或漏统计某一环节都会对不上（#71）"
+    )
+    assert attempt.output_tokens == 3 * 100 + 3 * 200 + 300 + 50, (
+        f"输出 token 对不上：{attempt.output_tokens}"
+    )
+    assert attempt.input_tokens > 0 and attempt.output_tokens > 0, "token 必须是真实数字，不许再写 0"
+
 # ================================================================
 # #30 跨计价时段比较成本 → 假的"成本翻倍"
 # ================================================================

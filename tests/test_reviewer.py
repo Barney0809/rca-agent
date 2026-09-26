@@ -34,6 +34,10 @@ class _Result:
     def __init__(self, text: str, cost: float = 0.01) -> None:
         self.text = text
         self.cost_yuan = cost
+        # ⚠️ #71：真实的 `LlmResult` **永远**带 `usage`（成本就是拿它算出来的），
+        #    所以替身也必须带 —— 不带的话，"token 记账"这条路径在测试里根本走不到，
+        #    而它恰恰是 #70 那种对账查不下去的地方。
+        self.usage = {"prompt_tokens": 120, "completion_tokens": 30}
 
 
 class _FakeClient:

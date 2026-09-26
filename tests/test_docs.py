@@ -18,12 +18,16 @@
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # 只扫仓库里"人写的"文档；跳过依赖目录与变异副本
 SKIP_PARTS = (".venv", "rca-mutants", "__pycache__", "node_modules", "runs")
@@ -226,3 +230,181 @@ def test_doc_scan_survives_a_project_path_that_looks_skippable(tmp_path, monkeyp
     assert found == {"a.md", "README.md"}, (
         f"扫描只找到 {found} —— 项目路径里出现「runs」这类名字时，整个扫描被静默跳过了"
     )
+
+
+# --------------------------------------------------------------------------- #
+# P11：封堵总览表的**行边界**必须由机器守着
+# --------------------------------------------------------------------------- #
+SEAL_ID_RE = re.compile(r"#\d+|P\d+")
+STATUS_MARKS = "🟢🟡🔴⬜❌⚠️"
+
+
+def _seal_tables() -> list[list[tuple[int, list[str]]]]:
+    """`docs/harness-log.md` 总览小节里的**编号表**：每张表 = [(行号, 单元格), ...]。
+
+    ⚠️ 三处刻意写细了：
+
+    1. **只认"表头第一格是 `#`"的表。** 那个小节里还有别的表（`验收标准` / `项` 开头），
+       它们不是封堵清单 —— 早期版本的解析器就是在这里把 `P5~P9` 数了两遍。
+    2. **小节范围用 `make_demo.OVERVIEW_HEADING`**，不在这里再写一份标题字面量：
+       页面生成器和守卫必须**看同一段**，否则两者可以各自"通过"却对不上（#43 那一类）。
+    3. **带行号返回**：断言失败时只能说"某一行的列数不对"是没用的 ——
+       报告里必须能直接跳到那一行。
+    """
+    from scripts import make_demo  # 延迟 import：ROOT 进 sys.path 是上面做的事
+
+    lines = (ROOT / "docs" / "harness-log.md").read_text(encoding="utf-8").splitlines()
+    start = next(
+        i for i, ln in enumerate(lines)
+        if ln.startswith("##") and make_demo.OVERVIEW_HEADING in ln
+    )
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    section = lines[start:end]
+
+    def cells(raw: str) -> list[str]:
+        return [c.strip() for c in raw.strip().strip("|").split("|")]
+
+    tables: list[list[tuple[int, list[str]]]] = []
+    i = 0
+    while i < len(section):
+        if not section[i].startswith("|"):
+            i += 1
+            continue
+        block: list[tuple[int, list[str]]] = []
+        while i < len(section) and section[i].startswith("|"):
+            # 行号按**原文件**算（+1 转成 1 起），这样报出来的行号能直接跳过去
+            block.append((start + i + 1, cells(section[i])))
+            i += 1
+        if block and block[0][1][0].replace("*", "").strip() == "#":
+            tables.append(block)
+    return tables
+
+
+def seal_table_problems(
+    tables: list[list[tuple[int, list[str]]]],
+    covered: set[str],
+) -> list[str]:
+    """五条不变量的**纯函数**版本：返回问题清单（空 = 表是健康的）。
+
+    抽成纯函数只为一件事：**能用一张合成的小表当场证明每条检查都有牙齿**。
+    真表里的编号随开发而变，靠真数据来证明"某条兜底是活的"是靠不住的 ——
+    一旦真实数据里恰好没有那种形状，那条检查就退化成"永远通过"，
+    而"永远通过"和"没有检查"在结果上完全一样（#47 记过这个坑）。
+    """
+    problems: list[str] = []
+    ids: list[str] = []
+
+    for block in tables:
+        width = len(block[0][1])
+        for line_no, row in block:
+            if len(row) != width:
+                problems.append(
+                    f"L{line_no}: 有 {len(row)} 个单元格，而表头是 {width} 个 —— 两行被粘起来了？"
+                )
+        for line_no, row in block[2:]:          # 跳过表头与分隔行
+            head = row[0].replace("*", "").strip()
+            if not SEAL_ID_RE.fullmatch(head):
+                problems.append(f"L{line_no}: 第一格不是编号，而是 {head[:28]!r} —— 编号被吃掉了？")
+                continue
+            if not any(m in row[-1] for m in STATUS_MARKS):
+                problems.append(
+                    f"L{line_no}（{head}）: 最后一格没有状态标记：{row[-1][:28]!r} —— 行尾被吃掉了？"
+                )
+            ids.append(head)
+
+    dup = sorted({i for i in ids if ids.count(i) > 1})
+    if dup:
+        problems.append(f"编号重复：{dup}（一行被复制了？）")
+
+    for prefix, label in (("#", "#N 组"), ("P", "PN 组")):
+        nums = sorted(int(i[1:]) for i in ids if i.startswith(prefix))
+        if not nums:
+            continue                            # 该组一条都没有：由调用方负责断言非空
+        gaps = [n for n in range(1, nums[-1] + 1) if n not in nums]
+        if gaps:
+            problems.append(f"{label} 从 1 到 {nums[-1]} 缺了 {gaps} —— 总览表少了一行（丢行会断号）")
+
+    missing = sorted(covered - set(ids))
+    if missing:
+        problems.append(
+            f"这些编号有变异组背书，却在总览表里找不到行：{missing}"
+            "（尾部丢行不会断号，只有这条交叉核对能抓到）"
+        )
+    return problems
+
+
+def test_the_seal_overview_table_cannot_silently_lose_a_row() -> None:
+    """P11：总览表"少了一行 / 粘了一行"必须变红，而不是等我自己看出来。
+
+    现场（**六次**）：我给总览表追加或改写一行时，习惯把 `old_string` 锚在
+    **某一行的开头**（`| **#68** | …`），于是替换把**上一行的尾巴**和这一行
+    的头粘在了一起 —— 表里少一行、那一行多出几列，而：
+
+      · Markdown 渲染出来只是"有点怪"，不报错；
+      · `pytest` 一句话都不说；
+      · `seal_report.py` 只按编号对账，**粘行不改变编号集合时它照样绿**。
+
+    六次全靠我事后用脚本肉眼核对。这是 P5/P10 的同族：**为了省事绕开了正常工具**
+    （P5 是手拼带引号的字符串，P10 是让 shell 往返改写文件，这里是锚错行）。
+
+    ⇒ 把"表格还完整吗"变成五条可执行的不变量（实现见 `seal_table_problems`）：
+
+      1. 每张编号表里所有行的**单元格数一致**（粘行会多出列）；
+      2. 每个数据行的**第一格必须是编号**（粘行会吃掉编号）；
+      3. 最后一格必须带**状态标记**（行尾被吃掉会露出来）；
+      4. 编号**不重复**、`#`/`P` 两组**从 1 连续**（丢行会断号）；
+      5. 有变异组背书的编号**必须在表里有行** —— 这条挡"丢掉编号最大那一行"：
+         此时 1..max 仍然连续，断号检查看不见。
+
+    本次运行**故意把真表改坏过两次**（见 `mutations.json` 的
+    `seal_table_row_integrity`）：`sealtable-a-drop-a-row-boundary` 把分隔行和第一行
+    粘起来、`sealtable-b-delete-the-last-row` 直接删掉表的最后一行 —— 两条都当场变红。
+    """
+    tables = _seal_tables()
+    spec = json.loads((ROOT / "scripts" / "mutations.json").read_text(encoding="utf-8"))
+    covered = {i for g in spec.values() for i in g.get("harness_log", [])}
+
+    problems = seal_table_problems(tables, covered)
+    assert not problems, (
+        "封堵总览表的结构坏了：\n  " + "\n  ".join(problems) + "\n"
+        "⇒ 这种损坏不会让任何别的测试报错，只能靠这条守卫 —— 修好行边界再提交"
+    )
+
+    # ---- 防空绿：守卫自己必须先证明"它确实看到了东西" -------------------- #
+    assert len(tables) >= 2, (
+        f"只认出 {len(tables)} 张编号表 —— 小节结构变了，这条守卫正在**空转**"
+    )
+    ids = [row[0].replace("*", "").strip() for block in tables for _n, row in block[2:]]
+    assert len(ids) >= 60, f"只解析出 {len(ids)} 行 —— 解析规则可能坏了"
+    assert {"#", "P"} <= {i[0] for i in ids}, f"`#` 与 `P` 两组必须都有，实际 {sorted(set(i[0] for i in ids))}"
+    assert len(covered) >= 50, f"变异定义里只读到 {len(covered)} 个编号 —— 交叉核对在空转"
+
+
+def test_the_seal_table_guard_sees_a_lost_tail_row() -> None:
+    """**合成表**证明第 5 条不变量（交叉核对）是活的 —— 它专门管尾部丢行。
+
+    为什么不用真表证明：真表里"哪个编号恰好有变异组"随开发而变，
+    而这条兜底的价值恰好在**编号最大那一行被删掉**时体现（此时 1..max 仍然连续，
+    断号检查看不见）。合成表把这个形状钉死，不依赖真实数据。
+    """
+    def row(n: int) -> tuple[int, list[str]]:
+        return (n, [f"**#{n}**", "某个错误", "✅", "✅", "✅", "🟢 **已封堵**"])
+
+    header = (1, ["#", "错误", "代码已修", "回归用例", "证明能变红", "**是否封堵**"])
+    sep = (2, ["---"] * 6)
+    healthy = [[header, sep, row(1), row(2)]]
+    covered = {"#1", "#2"}
+
+    assert seal_table_problems(healthy, covered) == [], "健康的小表被误判了 —— 守卫会误伤真表"
+
+    lost_tail = [[header, sep, row(1)]]          # 尾部那一行没了
+    problems = seal_table_problems(lost_tail, covered)
+
+    assert problems, "尾部丢了一行，守卫却说没问题 —— 那条交叉核对是死的"
+    assert any("#2" in p for p in problems), f"报的问题没点到丢掉的编号上：{problems}"
+
+    # 顺带钉住另外两条：粘行（多出列）与行尾被吃掉（末格没有状态标记）
+    glued = [[header, (2, ["---"] * 6 + ["**#1**"]), row(2)]]
+    assert seal_table_problems(glued, covered), "粘行没被抓到"
+    eaten_tail = [[header, sep, (3, ["**#1**", "某个错误", "✅", "✅", "✅", "（空）"]), row(2)]]
+    assert seal_table_problems(eaten_tail, covered), "末格没有状态标记没被抓到"

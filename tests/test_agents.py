@@ -657,3 +657,99 @@ def test_coordinator_cap_is_not_tighter_than_cross_exam():
         return int(m[-1])
 
     assert cap_before('tag="coordinator"') >= cap_before('tag=f"crossexam/')
+
+
+# ================================================================
+# #71：一次诊断的**调用次数**与**token**必须与真实调用一致
+# ================================================================
+#
+# 现场（两处，同源）：
+#   ① `_run_multi_slice` 把 `input_tokens` / `output_tokens` 写死成 0，
+#      而 `CrossExam` / `Verdict` / `Review` 干脆**没有** token 字段
+#      ⇒ 归档里有"花了多少钱"，却没有"钱是怎么花出来的"的原料；
+#   ② `diagnose_multi()` 末尾那行赋值把**护栏自己的调用次数覆盖掉**了
+#      （上面 `out.n_llm_calls += 1` 写完就被盖），而成本里**是算进了护栏那两次的**
+#      ⇒ 同一个归档里"次数"和"钱"对不上。
+#
+# 这两条合起来，就是 #70（余额对账差 ¥6.76）查不下去的原因：
+# **不是算错了，而是没法核对** —— 检查一个数字需要它的原料，原料没留就只剩猜。
+
+
+def test_multi_counts_every_call_and_records_the_tokens_behind_the_cost(
+    empty_ctx: RunContext,
+) -> None:
+    """用替身客户端跑一遍真流程，核对三件事**互相对得上**：
+
+      · 调用次数（`n_llm_calls`） == 替身实际被调用的次数；
+      · 输入/输出 token == 替身每次返回的 token 之和；
+      · 成本 == 每次返回的成本之和（token 与钱出自同一批调用）。
+
+    为什么必须是"真跑一遍"：这三个数都是**累加**出来的，
+    而累加最容易错的不是公式，是**漏掉某个环节**（护栏、修正、裁决……）——
+    只有真跑一遍才会路过所有环节。
+    """
+    from concurrent.futures import ThreadPoolExecutor  # noqa: F401  (说明并发是真发生的)
+
+    from rca.agents.coordinator import diagnose_multi
+    from rca.llm.provider import LlmResult
+
+    # 一份"所有环节都认"的 JSON：三个阶段各自只取自己需要的键。
+    REPLY = (
+        '{"claim": "外部风控变慢", "evidence": ["payment 800ms"],'
+        ' "needs_from_others": ["指标基线"], "confidence": 0.6,'
+        ' "revised_claim": "外部风控变慢（已质证）", "supports": [], "falsifies": [],'
+        ' "evidence_against": [], "changed": false, "why_changed": "",'
+        ' "root_causes": ["外部风控变慢"], "evidence_chain": ["payment 800ms"],'
+        ' "accepted": "logs", "rejected": [], "dissent": [], "issues": []}'
+    )
+
+    class StubClient:
+        """每次调用都返回同一份可解析结论 —— 于是每个环节**一次就收敛**。
+
+        这样"调用次数"是可预测的，而断言就能精确到"少算了哪一次"。
+        """
+
+        def __init__(self) -> None:
+            import threading
+
+            self._lock = threading.Lock()
+            self.tags: list[str] = []
+            self.cost = 0.01
+            self.in_tok = 120
+            self.out_tok = 30
+
+        def chat(self, *, messages, model=None, tools=None, max_tokens=None, tag="", **kw):  # noqa: ANN001, ANN003, ANN401
+            with self._lock:
+                self.tags.append(tag)
+            return LlmResult(
+                text=REPLY,
+                finish_reason="stop",
+                usage={"prompt_tokens": self.in_tok, "completion_tokens": self.out_tok},
+                model_used="deepseek-flash",
+                cost_yuan=self.cost,
+                raw={"choices": [{"message": {"role": "assistant", "content": REPLY}}]},
+            )
+
+    client = StubClient()
+    res = diagnose_multi(client, empty_ctx, max_steps=3, cross_exam_steps=3, guard=True)
+
+    # 3 调查 + 3 质证 + 1 裁决 + 1 护栏审查（issues 为空 ⇒ 不触发修正）= 8 次
+    assert len(client.tags) == 8, f"替身被调用了 {len(client.tags)} 次，流程变了：{client.tags}"
+    assert res.n_llm_calls == len(client.tags), (
+        f"归档记的调用次数是 {res.n_llm_calls}，真实是 {len(client.tags)} —— "
+        "次数漏了谁（护栏那两次最容易被覆盖掉），成本和次数就对不上"
+    )
+    assert res.total_input_tokens == client.in_tok * len(client.tags), (
+        f"输入 token {res.total_input_tokens} != 每次 {client.in_tok} × {len(client.tags)} 次"
+    )
+    assert res.total_output_tokens == client.out_tok * len(client.tags)
+    assert res.total_cost_yuan == __import__("pytest").approx(client.cost * len(client.tags))
+    assert res.guard_input_tokens == client.in_tok, "护栏审查那一次也要记账（它就是 #70 里最容易被漏掉的钱）"
+
+    d = res.to_dict()
+    assert d["input_tokens"] == res.total_input_tokens
+    assert d["output_tokens"] == res.total_output_tokens
+    assert d["cross_exams"][0]["input_tokens"] == client.in_tok, "质证环节的 token 要进存档"
+    assert d["verdict"]["input_tokens"] == client.in_tok, "裁决环节的 token 要进存档"
+
+

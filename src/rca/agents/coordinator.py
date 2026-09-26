@@ -111,6 +111,10 @@ class CrossExam:
     tool_calls: int = 0
     repeat_calls: int = 0            # ★ 打转统计（D9）
     cost_yuan: float = 0.0
+    # ★ token 数（#71）：成本是**算出来的**，而算它的原料必须能被事后核对。
+    #   此前这里只有 cost_yuan，于是"成本对不对"只能靠信任 —— 见 #71/#70。
+    input_tokens: int = 0
+    output_tokens: int = 0
     finished: bool = False
     raw_text: str = ""
     trace: list[dict] = field(default_factory=list)
@@ -136,6 +140,8 @@ class CrossExam:
             "tool_calls": self.tool_calls,
             "repeat_calls": self.repeat_calls,     # ★ 打转统计（D9）
             "cost_yuan": round(self.cost_yuan, 6),
+            "input_tokens": self.input_tokens,     # ★ #71：成本的原料
+            "output_tokens": self.output_tokens,
         }
 
 
@@ -211,6 +217,8 @@ def cross_examine(
 
     x = CrossExam(role=role.key, original_claim=own.claim)
     cost = 0.0
+    tok_in = 0
+    tok_out = 0
 
     for step in range(1, max_steps + 1):
         x.steps = step
@@ -240,6 +248,8 @@ def cross_examine(
             tag=f"crossexam/{role.key}/{local_ctx.run_id}",
         )
         cost += result.cost_yuan
+        tok_in += int(result.usage.get("prompt_tokens", 0) or 0)
+        tok_out += int(result.usage.get("completion_tokens", 0) or 0)
 
         if result.tool_calls:
             messages.append(result.raw["choices"][0]["message"])
@@ -279,6 +289,8 @@ def cross_examine(
     x.tool_calls = local_ctx.tool_calls
     x.repeat_calls = local_ctx.repeat_calls      # ★ 打转统计（D9）
     x.cost_yuan = cost
+    x.input_tokens = tok_in                      # ★ #71
+    x.output_tokens = tok_out
     return x
 
 
@@ -353,6 +365,8 @@ class Verdict:
 
     parse_ok: bool = False
     cost_yuan: float = 0.0
+    input_tokens: int = 0            # ★ #71：成本的原料
+    output_tokens: int = 0
     raw_text: str = ""
 
     def to_dict(self) -> dict:
@@ -366,6 +380,8 @@ class Verdict:
             "dissent": self.dissent,
             "parse_ok": self.parse_ok,
             "cost_yuan": round(self.cost_yuan, 6),
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
         }
 
 
@@ -433,6 +449,8 @@ def adjudicate(
     )
 
     v = Verdict(cost_yuan=result.cost_yuan, raw_text=result.text)
+    v.input_tokens = int(result.usage.get("prompt_tokens", 0) or 0)      # ★ #71
+    v.output_tokens = int(result.usage.get("completion_tokens", 0) or 0)
     parsed = extract_json(result.text)
     if parsed:
         # 与 baseline 用**同一个**解析函数：两种格式都认（新的列表 / 旧的单数），
@@ -482,6 +500,9 @@ class MultiAgentResult:
     guard_review: dict = field(default_factory=dict)
     guard_revised: bool = False
     guard_cost_yuan: float = 0.0
+    guard_input_tokens: int = 0      # ★ #71
+    guard_output_tokens: int = 0
+    guard_calls: int = 0             # ★ #71：护栏自己的调用次数（此前被丢掉）
 
     @property
     def total_cost_yuan(self) -> float:
@@ -490,6 +511,31 @@ class MultiAgentResult:
             + sum(c.cost_yuan for c in self.cross_exams)
             + self.verdict.cost_yuan
             + self.guard_cost_yuan
+        )
+
+    @property
+    def total_input_tokens(self) -> int:
+        """★ #71：一次诊断**用掉的 token**（成本的原料）。
+
+        为什么必须存：`cost_yuan` 是拿 token 数按单价算出来的，
+        而此前存档里**根本没有 token** —— 于是"这个成本对不对"无法事后核对，
+        只能靠信任。harness-log #70（对账差 ¥6.76 查不下去）就是撞在这上面：
+        钱花了，但**花在哪的原料没有留下**。
+        """
+        return (
+            sum(h.input_tokens for h in self.hypotheses)
+            + sum(c.input_tokens for c in self.cross_exams)
+            + self.verdict.input_tokens
+            + self.guard_input_tokens
+        )
+
+    @property
+    def total_output_tokens(self) -> int:
+        return (
+            sum(h.output_tokens for h in self.hypotheses)
+            + sum(c.output_tokens for c in self.cross_exams)
+            + self.verdict.output_tokens
+            + self.guard_output_tokens
         )
 
     def to_dict(self) -> dict:
@@ -506,6 +552,9 @@ class MultiAgentResult:
             "total_tool_calls": self.total_tool_calls,
             "denied_tool_calls": self.denied_tool_calls,
             "cost_yuan": round(self.total_cost_yuan, 6),
+            # ★ #71：成本的**原料**也要进存档 —— 没有它，成本无法事后核对。
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
             # ★ 护栏自己的账（与判定无关，单独摆出来便于 2×2 对照）
             "guard": {
                 "enabled": self.guard_enabled,
@@ -588,14 +637,18 @@ def diagnose_multi(
         review = review_evidence(client, material, out.verdict.raw_text, model=model)
         out.guard_review = review.to_dict()
         out.guard_cost_yuan += review.cost_yuan
-        out.n_llm_calls += 1
+        out.guard_input_tokens += review.input_tokens        # ★ #71
+        out.guard_output_tokens += review.output_tokens
+        out.guard_calls += 1
         if review.issues:
             revised = adjudicate(
                 client, out.hypotheses, out.cross_exams, model=model,
                 extra_suffix=build_revision_suffix(review.issues),
             )
             out.guard_cost_yuan += revised.cost_yuan
-            out.n_llm_calls += 1
+            out.guard_input_tokens += revised.input_tokens   # ★ #71
+            out.guard_output_tokens += revised.output_tokens
+            out.guard_calls += 1
             # ⚠️ 只有修订产出**可解析**的结论才替换原文 ——
             #    否则宁可保留第一次的结论，也不要一个半截答案（#27 的教训）。
             if revised.parse_ok:
@@ -608,9 +661,17 @@ def diagnose_multi(
                 out.guard_review["revision_unparsed"] = True
 
     out.elapsed_s = time.perf_counter() - started
-    out.n_llm_calls = sum(h.steps for h in out.hypotheses) + sum(
-        c.steps for c in out.cross_exams
-    ) + 1
+    # ⚠️ #71：这一行**曾经把护栏自己的调用次数覆盖掉**。
+    #    上面那两处 `out.n_llm_calls += 1`（审查者 + 一次修正）写完就被这行盖了，
+    #    于是"开了护栏"的归档里 `steps` 比真实调用数**少 1~2 次** ——
+    #    而成本里**是算进了护栏那两次的**（`guard_cost_yuan`）。
+    #    ⇒ 同一个归档里"次数"和"钱"对不上，正是 #70 那种对账查不下去的土壤。
+    out.n_llm_calls = (
+        sum(h.steps for h in out.hypotheses)
+        + sum(c.steps for c in out.cross_exams)
+        + 1                       # 裁决（协调者）
+        + out.guard_calls         # ★ 护栏自己的调用，必须算进来
+    )
     out.total_tool_calls = sum(h.tool_calls for h in out.hypotheses) + sum(
         c.tool_calls for c in out.cross_exams
     )

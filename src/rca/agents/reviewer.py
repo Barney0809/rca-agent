@@ -71,6 +71,8 @@ class Review:
     issues: list[dict] = field(default_factory=list)
     raw_text: str = ""
     cost_yuan: float = 0.0
+    input_tokens: int = 0            # ★ #71：成本的原料
+    output_tokens: int = 0
     parse_ok: bool = False
     error: str = ""
 
@@ -83,6 +85,8 @@ class Review:
             "n_issues": len(self.issues),
             "issues": self.issues,
             "cost_yuan": round(self.cost_yuan, 6),
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
             "parse_ok": self.parse_ok,
             "error": self.error,
             "ran": self.ran,
@@ -134,7 +138,12 @@ def review_evidence(
     except Exception as exc:                      # noqa: BLE001 —— fail-safe 是刻意的
         return Review(error=f"{type(exc).__name__}: {exc}")
 
-    review = Review(raw_text=result.text, cost_yuan=result.cost_yuan)
+    review = Review(
+        raw_text=result.text,
+        cost_yuan=result.cost_yuan,
+        input_tokens=int(result.usage.get("prompt_tokens", 0) or 0),      # ★ #71
+        output_tokens=int(result.usage.get("completion_tokens", 0) or 0),
+    )
     parsed = extract_json(result.text)
     if not isinstance(parsed, dict):
         review.error = "审查者没有返回可解析的 JSON"

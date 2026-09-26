@@ -379,6 +379,100 @@
       }
     ]
   },
+  "seal_table_row_integrity": {
+    "harness_log": [
+      "P11"
+    ],
+    "why": "Six times an edit to the sealing overview table was anchored on the START of a row, so the previous row's tail and the new row's head were glued into one line: the table silently lost a row and gained columns, Markdown rendered it as merely 'a bit odd', pytest said nothing, and seal_report.py stayed green (gluing rows need not change the set of ids). Every one of the six was found by me eyeballing a helper script afterwards -- i.e. by the very 'trust the human to remember' mechanism this repo exists to remove. So the table's row boundaries get a machine guard, and that guard needs mutations that re-enact the accident.",
+    "tests": [
+      "tests/test_docs.py"
+    ],
+    "mutations": [
+      {
+        "id": "sealtable-a-drop-a-row-boundary",
+        "desc": "Re-enact the accident in its purest form: delete the row boundary between the table separator and the first data row, so two table lines become one. The merged line has more cells than the header and row #1 is gone -- exactly the shape of the six clobbers.",
+        "file": "docs/harness-log.md",
+        "find": "|---|---|---|---|---|---|\n| **#1** | 误删工作目录之外的目录（**不可恢复**） | 🟡 **部分** | ✅ 24 条 | ✅ 见条目 | 🟡 **部分封堵** |",
+        "replace": "|---|---|---|---|---|---| | **#1** | 误删工作目录之外的目录（**不可恢复**） | 🟡 **部分** | ✅ 24 条 | ✅ 见条目 | 🟡 **部分封堵** |",
+        "expect_red": [
+          "tests/test_docs.py::test_the_seal_overview_table_cannot_silently_lose_a_row"
+        ]
+      },
+      {
+        "id": "sealtable-b-delete-the-last-row",
+        "desc": "Second, independent shape: delete the WHOLE last row of the table (row #68) instead of gluing it. The id simply vanishes, so the column check has nothing to see; this one is caught by the id checks -- a gap appears in the numbering (the ids above it survive) and the deleted id has a mutation group, which the cross-check against scripts/mutations.json also demands. This is the shape that happens when an append edit eats the tail, which is where new rows go.",
+        "file": "docs/harness-log.md",
+        "find": "\n| **#68** | **三个依赖\"声明了却没人 import\"** —— `langchain-core` / `langchain-openai` / `structlog` 写在 `pyproject.toml` 里，而**全仓库没有任何 `.py` import 它们** ⇒ 读者（和面试官）会以为\"这个项目用 langchain\"，而真正的实现是 `from openai import OpenAI` **直连**（`src/rca/llm/provider.py`）。同族：#66（6 个没人读的环境变量）、#67（`.env` 没人读）—— **声明/文档承诺了，代码不认，而且不报错**。顺带量出：`scripts/dev.ps1` 的自检表里有 `sse_starlette`（**从没声明过**，靠传递依赖装着） | ✅ 本次提交 | ✅ 1 条 | ✅ 变异测试（1 个变异体：把 `langchain-openai` 加回依赖表 —— 两条失败路径都红，与\"装没装\"无关） | 🟢 **已封堵**（三个依赖从 `pyproject.toml` 与文档里去掉了；`dev.ps1` 自检表对齐成\"声明的依赖\"；新增守卫：用 `importlib.metadata.packages_distributions()` 做**发行名→模块名**映射 —— 朴素写法会误报 `python-dotenv`→`dotenv`、`langgraph-checkpoint-sqlite`→`langgraph`；`uvicorn`（`python -m uvicorn` 启动）走**显式例外表**并写明理由，例外表本身也被查\"是否还在声明里\"） |",
+        "replace": "",
+        "expect_red": [
+          "tests/test_docs.py::test_the_seal_overview_table_cannot_silently_lose_a_row"
+        ]
+      }
+    ]
+  },
+  "multi_token_and_call_accounting": {
+    "harness_log": [
+      "#71"
+    ],
+    "why": "Two defects with one root cause, found while trying to close #70 (a balance reconciliation gap of about CNY 6.76 that could not be traced). (1) The multi-agent attempt recorded input_tokens=0 / output_tokens=0, and CrossExam/Verdict/Review had no token fields at all -- so the archive stored what the run COST but not the material the cost is computed FROM, which makes the cost unauditable after the fact. (2) The line that assigns n_llm_calls at the end of diagnose_multi overwrote the guard's own call count, while total_cost_yuan DOES include the guard's calls -- so within one archive the number of calls and the money disagreed, and the guard's calls were the missing ones. Neither defect raises an error: the archive simply looks fine and cannot be checked.",
+    "tests": [
+      "tests/test_agents.py",
+      "tests/test_eval.py"
+    ],
+    "mutations": [
+      {
+        "id": "token-a-write-zero-tokens-again",
+        "desc": "Re-enact the original line: record zeros instead of the tokens the cost was computed from. The run still reports a cost, still looks complete, and the cost can no longer be checked against anything.",
+        "file": "eval/runner.py",
+        "find": "        input_tokens=res.total_input_tokens,\n        output_tokens=res.total_output_tokens,",
+        "replace": "        input_tokens=0,\n        output_tokens=0,",
+        "expect_red": [
+          "tests/test_eval.py::test_multi_attempt_records_the_tokens_the_cost_was_computed_from"
+        ]
+      },
+      {
+        "id": "token-b-stop-counting-cross-exam-tokens",
+        "desc": "Stop accumulating tokens in the cross-examination loop -- one of the three stages silently drops out of the total. This is the shape of the original bug (a stage that spends money but never shows up in the accounting).",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "        tok_in += int(result.usage.get(\"prompt_tokens\", 0) or 0)\n        tok_out += int(result.usage.get(\"completion_tokens\", 0) or 0)",
+        "replace": "        tok_in += 0\n        tok_out += 0",
+        "expect_red": [
+          "tests/test_agents.py::test_multi_counts_every_call_and_records_the_tokens_behind_the_cost"
+        ]
+      },
+      {
+        "id": "token-c-drop-the-guard-calls-from-the-count",
+        "desc": "Drop the guard's own calls from n_llm_calls (exactly what the overwritten assignment did) while the guard's cost stays in the total. The archive then says 'N calls cost CNY X' where X was produced by N+1 calls.",
+        "file": "src/rca/agents/coordinator.py",
+        "find": "        + out.guard_calls",
+        "replace": "        + 0",
+        "expect_red": [
+          "tests/test_agents.py::test_multi_counts_every_call_and_records_the_tokens_behind_the_cost"
+        ]
+      }
+    ]
+  },
+  "cost_accounting_is_project_level": {
+    "harness_log": [
+      "#70"
+    ],
+    "why": "Closing a work session, the account balance had dropped CNY 10.17 while only CNY 3.41 was on record, and the CNY 6.76 difference could not be traced. It turned out the pricing model was never wrong: the API key is SHARED with the model that drives the agent itself, so `total_balance` is an ACCOUNT-level number that includes the agent's own reasoning spend. Measured from the harness session records: 876 calls in one session (all deepseek-flash) used 343M cache-read + 449k uncached input + 648k output tokens, i.e. about CNY 11.3 by this project's own price table -- the same order as the 'missing' CNY 6.76 (cache-read alone is CNY 6.85). The danger is that the balance LOOKS like the authoritative number (it is a bill, the estimate is a model), so 'let me just verify against the real balance' is a very natural edit to make -- and I made it.",
+    "tests": [
+      "tests/test_offline.py"
+    ],
+    "mutations": [
+      {
+        "id": "cost-a-verify-with-the-account-balance",
+        "desc": "Re-enact the mistake in its most natural form: add a helper that reads the ACCOUNT balance into the project's cost tooling 'to verify the estimate'. Nothing errors, the numbers look better-sourced than before, and the report quietly changes meaning from project cost to account cost. (The helper is defined but never called -- adding a call would make the mutant crash at import time and turn unrelated cases red, which would point the evidence at the wrong test.)",
+        "file": "scripts/cost_breakdown.py",
+        "find": "def main() -> int:",
+        "replace": "def _account_balance_for_verification() -> float:\n    \"\"\"用账单核对一下成本（看起来很自然，实际上口径错了）。\"\"\"\n    import httpx\n    r = httpx.get(\"https://api.deepseek.com/user/balance\", timeout=20.0)\n    return float(r.json()[\"balance_infos\"][0][\"total_balance\"])\n\n\ndef main() -> int:",
+        "expect_red": [
+          "tests/test_offline.py::test_no_project_code_treats_the_account_balance_as_its_own_cost"
+        ]
+      }
+    ]
+  },
   "historical_encoding_and_parsing": {
     "harness_log": [
       "#2",
@@ -2101,7 +2195,7 @@
         "id": "status-a-doc-claims-a-wrong-test-count",
         "desc": "Make the authority file claim a test count that does not exist, which is exactly what happened by accident (254 vs 255) before the guard existed.",
         "file": "docs/00-状态.md",
-        "find": "**356 passed / 1 skipped**",
+        "find": "**361 passed / 1 skipped**",
         "replace": "**999 passed / 1 skipped**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_test_count_matches_reality"
@@ -2111,7 +2205,7 @@
         "id": "status-b-doc-claims-wrong-mutation-counts",
         "desc": "Put the D9-era mutation counts back into the authority file (38 groups / 90 mutants), the same drift that sat unnoticed in the D9 delivery row.",
         "file": "docs/00-状态.md",
-        "find": "**56 组 / 148 个变异体，全部 SEALED**",
+        "find": "**59 组 / 154 个变异体，全部 SEALED**",
         "replace": "**38 组 / 90 个变异体，全部 SEALED**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_mutation_counts_match_mutations_json"
@@ -2121,7 +2215,7 @@
         "id": "status-c-doc-claims-wrong-seal-count",
         "desc": "Change only the headline seal count and leave the machine/human split alone, so the guard has to reconcile all three numbers rather than just the total.",
         "file": "docs/00-状态.md",
-        "find": "封堵清单：**80 条**（其中 **69 条**由变异测试证明能变红，**11 条**",
+        "find": "封堵清单：**82 条**（其中 **72 条**由变异测试证明能变红，**10 条**",
         "replace": "封堵清单：**99 条**（其中 **59 条**由变异测试证明能变红，**11 条**",
         "expect_red": [
           "tests/test_status_numbers.py::test_status_seal_counts_match_harness_log"
